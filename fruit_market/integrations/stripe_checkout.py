@@ -27,13 +27,15 @@ def create(
     if unit_amount_cents <= 0:
         raise ValueError("unit_amount_cents must be > 0")
     stripe.api_key = required_env("STRIPE_SECRET_KEY")
+    session_metadata = {"customer_phone": customer_phone, **(metadata or {})}
     session = stripe.checkout.Session.create(
         mode="payment",
         success_url=success_url,
         cancel_url=cancel_url,
-        customer_creation="if_required",
+        customer_creation="always",
         phone_number_collection={"enabled": True},
-        metadata={"customer_phone": customer_phone, **(metadata or {})},
+        metadata=session_metadata,
+        payment_intent_data={"metadata": session_metadata},
         line_items=[
             {
                 "quantity": qty,

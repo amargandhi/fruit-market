@@ -7,14 +7,14 @@ for an enabled staging/live restock runtime.
 
 from __future__ import annotations
 
-import importlib
-import inspect
+import json
+import os
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from fruit_market.restock.projection import RestockRecord
 
 
@@ -42,61 +42,102 @@ class PaySpongeClient(Protocol):
 
 
 class PaySpongeWalletClient:
-    """Thin dynamic wrapper around the Python PaySponge wallet SDK."""
+    """Wallet client used by the live restock flow.
 
-    def __init__(self, *, api_key: str, preferred_chain: str = "base") -> None:
+    PaySponge's public docs currently prioritize ``@paysponge/sdk`` for
+    ``submitPlan``, ``approvePlan``, and ``paidFetch``. To keep the
+    Python app stable while that SDK surface evolves, this client calls a
+    tiny Node bridge only when staging/live restock is enabled.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        preferred_chain: str = "base",
+        api_base: str | None = None,
+        bridge_path: str | Path | None = None,
+        node_bin: str | None = None,
+        timeout_s: float = 30.0,
+    ) -> None:
         if not api_key:
             raise ValueError("SPONGE_API_KEY is required for staging_live restock")
-        module = importlib.import_module("paysponge")
-        wallet_cls = _required_attr(module, "SpongeWallet")
-        self._wallet = _call(_method(wallet_cls, "connect"), api_key=api_key)
+        root = Path(__file__).resolve().parents[2]
+        self._bridge_path = Path(
+            bridge_path
+            or os.environ.get("RESTOCK_PAYSPONGE_BRIDGE_PATH", "")
+            or root / "scripts" / "paysponge_wallet_bridge.mjs"
+        )
+        self._node_bin = node_bin or os.environ.get("RESTOCK_NODE_BIN", "node")
+        self._api_key = api_key
+        self._api_base = api_base or os.environ.get("SPONGE_API_BASE", "")
         self._preferred_chain = preferred_chain
+        self._timeout_s = timeout_s
 
     def submit_plan(self, proposal: RestockRecord, body: dict[str, object]) -> SpongePlan:
-        method = _method(self._wallet, "submit_plan", "submitPlan")
-        payload = {
-            "title": f"Restock {proposal.qty} {proposal.item_name}",
-            "steps": [
-                {
-                    "type": "paid_fetch",
-                    "args": self._fetch_args(proposal, body),
-                }
-            ],
-            "metadata": {
-                "proposal_id": proposal.proposal_id,
-                "payload_hash": proposal.payload_hash,
-                "amount_cents": proposal.amount_cents,
-            },
-        }
-        raw = _call(method, payload)
-        return SpongePlan(plan_id=_extract_id(raw, "plan_id", "planId", "id"), raw=raw)
+        raw = self._run_bridge("submit_plan", proposal, body)
+        return SpongePlan(
+            plan_id=_extract_id(raw, "plan_id", "planId", "id"),
+            raw=raw.get("raw", raw),
+        )
 
     def approve_plan(self, plan_id: str) -> object:
-        method = _method(self._wallet, "approve_plan", "approvePlan")
-        return _call(method, plan_id)
+        raw = self._run_bridge_payload("approve_plan", {"plan_id": plan_id})
+        return raw.get("raw", raw)
 
     def paid_fetch(self, proposal: RestockRecord, body: dict[str, object]) -> SpongePayment:
-        method = _method(self._wallet, "paid_fetch", "paidFetch", "x402_fetch", "x402Fetch")
-        raw = _call(method, self._fetch_args(proposal, body))
-        response = _extract_response(raw)
+        raw = self._run_bridge("paid_fetch", proposal, body)
         return SpongePayment(
             payment_id=_extract_id(raw, "payment_id", "paymentId", "id", default=""),
             receipt=_extract_optional_str(raw, "payment_receipt", "paymentReceipt", "receipt"),
-            response=response,
+            response=raw.get("response", _extract_response(raw)),
             raw=raw,
         )
 
-    def _fetch_args(
-        self, proposal: RestockRecord, body: dict[str, object]
+    def probe(self) -> dict[str, object]:
+        return self._run_bridge_payload("probe", {})
+
+    def _run_bridge(
+        self, command: str, proposal: RestockRecord, body: dict[str, object]
     ) -> dict[str, object]:
-        return {
-            "url": proposal.gateway_url,
-            "method": "POST",
-            "body": body,
-            "preferred_chain": self._preferred_chain,
-            "preferredChain": self._preferred_chain,
-            "chain": self._preferred_chain,
-        }
+        return self._run_bridge_payload(
+            command,
+            {
+                "proposal": _proposal_payload(proposal),
+                "body": body,
+                "preferred_chain": self._preferred_chain,
+            },
+        )
+
+    def _run_bridge_payload(
+        self, command: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        env = os.environ.copy()
+        env["SPONGE_API_KEY"] = self._api_key
+        if self._api_base:
+            env["SPONGE_API_BASE"] = self._api_base
+        env["RESTOCK_SPONGE_PREFERRED_CHAIN"] = self._preferred_chain
+        proc = subprocess.run(
+            [self._node_bin, str(self._bridge_path), command],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=self._timeout_s,
+            env=env,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = _safe_bridge_error(proc.stdout, proc.stderr)
+            raise RuntimeError(f"PaySponge bridge {command} failed: {detail}")
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("PaySponge bridge returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("PaySponge bridge returned a non-object JSON payload")
+        if data.get("ok") is False:
+            raise RuntimeError(str(data.get("error") or "PaySponge bridge failed"))
+        return cast("dict[str, object]", data)
 
 
 class UnavailablePaySpongeClient:
@@ -113,28 +154,6 @@ class UnavailablePaySpongeClient:
 
     def paid_fetch(self, proposal: RestockRecord, body: dict[str, object]) -> SpongePayment:
         raise RuntimeError(self._reason)
-
-
-def _required_attr(obj: object, name: str) -> object:
-    value = getattr(obj, name, None)
-    if value is None:
-        raise AttributeError(f"PaySponge SDK missing {name}")
-    return cast("object", value)
-
-
-def _method(obj: object, *names: str) -> Callable[..., object]:
-    for name in names:
-        method = getattr(obj, name, None)
-        if callable(method):
-            return cast("Callable[..., object]", method)
-    raise AttributeError(f"PaySponge SDK missing any of: {', '.join(names)}")
-
-
-def _call(fn: Callable[..., object], *args: object, **kwargs: object) -> object:
-    result = fn(*args, **kwargs)
-    if inspect.isawaitable(result):
-        raise RuntimeError("async PaySponge SDK methods are not supported in this sync worker")
-    return result
 
 
 def _extract_id(raw: object, *names: str, default: str | None = None) -> str:
@@ -172,3 +191,28 @@ def _extract_response(raw: object) -> object:
             if key in raw:
                 return cast("object", raw[key])
     return raw
+
+
+def _proposal_payload(proposal: RestockRecord) -> dict[str, object]:
+    return {
+        "proposal_id": proposal.proposal_id,
+        "item_name": proposal.item_name,
+        "qty": proposal.qty,
+        "amount_cents": proposal.amount_cents,
+        "gateway_url": proposal.gateway_url,
+        "payload_hash": proposal.payload_hash,
+    }
+
+
+def _safe_bridge_error(stdout: str, stderr: str) -> str:
+    for candidate in (stdout, stderr):
+        text = candidate.strip()
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return text[-500:]
+        if isinstance(data, dict) and data.get("error"):
+            return str(data["error"])
+    return "exit status without error text"
