@@ -9,6 +9,8 @@ from fruit_market.state.events import (
     Event,
     RestockApproved,
     RestockOrdered,
+    RestockOperatorEmailFailed,
+    RestockOperatorEmailed,
     RestockPaymentFailed,
     RestockPaymentStarted,
     RestockProposed,
@@ -48,10 +50,16 @@ class RestockRecord:
     idempotency_key: str
     expires_at_iso: str
     status: RestockStatus
+    eta_minutes: int = 0
+    basket_url: str = ""
     sponge_plan_id: str | None = None
     supplier_order_id: str | None = None
     sponge_payment_id: str | None = None
     eta_iso: str | None = None
+    operator_email: str | None = None
+    email_status: str = "not_configured"
+    email_message_id: str | None = None
+    email_failure_reason: str | None = None
     failure_stage: str | None = None
     failure_reason: str | None = None
 
@@ -87,12 +95,29 @@ class RestockProjection:
                 idempotency_key=event.idempotency_key,
                 expires_at_iso=event.expires_at_iso,
                 status="pending_approval",
+                eta_minutes=event.eta_minutes,
+                basket_url=event.basket_url,
             )
             self._records[event.proposal_id] = record
             self._by_stock_low_offset[event.stock_low_offset] = event.proposal_id
         elif isinstance(event, RestockSpongePlanSubmitted):
             self._replace(
                 event.proposal_id, sponge_plan_id=event.sponge_plan_id
+            )
+        elif isinstance(event, RestockOperatorEmailed):
+            self._replace(
+                event.proposal_id,
+                operator_email=event.to_email,
+                email_status="sent",
+                email_message_id=event.message_id,
+                email_failure_reason=None,
+            )
+        elif isinstance(event, RestockOperatorEmailFailed):
+            self._replace(
+                event.proposal_id,
+                operator_email=event.to_email,
+                email_status="failed",
+                email_failure_reason=event.reason,
             )
         elif isinstance(event, RestockApproved):
             self._replace(event.proposal_id, status="approved")

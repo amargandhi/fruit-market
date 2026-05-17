@@ -19,12 +19,13 @@ if TYPE_CHECKING:
     from fruit_market.services.protocols import Order
 
 
-def send_receipt(to_email: str, order: Order) -> str:
+def send_receipt(to_email: str, order: Order, item_name: str | None = None) -> str:
+    item_label = item_name or order.item_id
     subject = f"Fruit Market receipt for order {order.id}"
     text = (
         "Thanks for your Fruit Market order.\n\n"
         f"Order: {order.id}\n"
-        f"Item: {order.item_id}\n"
+        f"Item: {item_label}\n"
         f"Quantity: {order.qty}\n"
         f"Total: ${order.total_cents / 100:.2f}\n"
         f"Status: {order.status}\n"
@@ -33,7 +34,7 @@ def send_receipt(to_email: str, order: Order) -> str:
         "<h1>Fruit Market receipt</h1>"
         f"<p>Order <strong>{html.escape(order.id)}</strong> is {html.escape(order.status)}.</p>"
         "<dl>"
-        f"<dt>Item</dt><dd>{html.escape(order.item_id)}</dd>"
+        f"<dt>Item</dt><dd>{html.escape(item_label)}</dd>"
         f"<dt>Quantity</dt><dd>{order.qty}</dd>"
         f"<dt>Total</dt><dd>${order.total_cents / 100:.2f}</dd>"
         "</dl>"
@@ -44,6 +45,43 @@ def send_receipt(to_email: str, order: Order) -> str:
         "text": text,
         "html": html_body,
         "labels": ["fruit-market", "receipt"],
+    }
+    return _send(payload)
+
+
+def send_operator_order_notification(
+    to_email: str,
+    order: Order,
+    item_name: str,
+) -> str:
+    item_label = _quantity_label(order.qty, item_name)
+    subject = f"Set aside {item_label} for order {order.id}"
+    total = _money(order.total_cents)
+    text = (
+        "A Fruit Market customer has paid. Set this order aside for pickup.\n\n"
+        f"Order: {order.id}\n"
+        f"Item: {item_label}\n"
+        f"Quantity: {order.qty}\n"
+        f"Customer phone: {order.customer_phone}\n"
+        f"Total paid: {total}\n"
+    )
+    html_body = (
+        "<h1>Paid Fruit Market order</h1>"
+        "<p>Set this order aside for pickup.</p>"
+        "<dl>"
+        f"<dt>Order</dt><dd>{html.escape(order.id)}</dd>"
+        f"<dt>Item</dt><dd>{html.escape(item_label)}</dd>"
+        f"<dt>Quantity</dt><dd>{order.qty}</dd>"
+        f"<dt>Customer phone</dt><dd>{html.escape(order.customer_phone)}</dd>"
+        f"<dt>Total paid</dt><dd>{total}</dd>"
+        "</dl>"
+    )
+    payload: dict[str, Any] = {
+        "to": to_email,
+        "subject": subject,
+        "text": text,
+        "html": html_body,
+        "labels": ["fruit-market", "operator", "paid-order"],
     }
     return _send(payload)
 
@@ -106,6 +144,12 @@ def send_restock_approval(to_email: str, proposal: RestockRecord) -> str:
 
 def _money(cents: int) -> str:
     return f"${cents / 100:.2f}"
+
+
+def _quantity_label(qty: int, item_name: str) -> str:
+    if qty == 1 or item_name.endswith("s"):
+        return f"{qty} {item_name}"
+    return f"{qty} {item_name}s"
 
 
 def _send(payload: dict[str, Any]) -> str:

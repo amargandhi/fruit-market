@@ -150,6 +150,7 @@ def build_restock_runtime(
             live_sponge = PaySpongeWalletClient(
                 api_key=settings.sponge_api_key,
                 preferred_chain=settings.sponge_preferred_chain,
+                api_base=None,
             )
         except Exception as exc:  # noqa: BLE001
             live_sponge = UnavailablePaySpongeClient(str(exc))

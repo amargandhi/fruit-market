@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -38,6 +40,9 @@ if TYPE_CHECKING:
     from fruit_market.state.store import EventStore
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class ApprovalResult:
     ok: bool
@@ -59,6 +64,7 @@ class RestockCoordinator:
         supplier: SupplierQuoteClient,
         sponge: PaySpongeClient | None,
         operator_notifier: Callable[[str, RestockRecord], str] | None = None,
+        operator_sms_notifier: Callable[[str, RestockRecord], str] | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
@@ -67,6 +73,7 @@ class RestockCoordinator:
         self._supplier = supplier
         self._sponge = sponge
         self._operator_notifier = operator_notifier
+        self._operator_sms_notifier = operator_sms_notifier
         self._lock = threading.Lock()
 
     def handle_stock_low(self, offset: int, event: StockLow) -> None:
@@ -211,6 +218,10 @@ class RestockCoordinator:
         )
 
     def _notify_operator(self, record: RestockRecord) -> None:
+        self._notify_operator_email(record)
+        self._notify_operator_sms(record)
+
+    def _notify_operator_email(self, record: RestockRecord) -> None:
         to_email = self._settings.operator_email
         if not to_email:
             return
@@ -233,6 +244,16 @@ class RestockCoordinator:
                 message_id=message_id,
             )
         )
+
+    def _notify_operator_sms(self, record: RestockRecord) -> None:
+        to_phone = self._settings.operator_phone
+        if not to_phone:
+            return
+        try:
+            sender = self._operator_sms_notifier or _send_restock_sms
+            sender(to_phone, record)
+        except Exception:
+            logger.exception("failed to text restock proposal %s", record.proposal_id)
 
     def _process_approved(self, proposal_id: str) -> None:
         record = self._projection.get(proposal_id)
@@ -394,6 +415,29 @@ def _send_restock_email(to_email: str, record: RestockRecord) -> str:
     )
 
     return send_restock_approval(to_email, record)
+
+
+def _send_restock_sms(to_phone: str, record: RestockRecord) -> str:
+    if os.environ.get("AGENTPHONE_SEND_MODE", "").strip().lower() != "live":
+        return "sms_mock"
+    from fruit_market.integrations.agentphone import send_sms  # noqa: PLC0415
+
+    total = f"${record.amount_cents / 100:.2f}"
+    eta = (
+        f"{record.eta_minutes} min"
+        if record.eta_minutes > 0
+        else "ETA pending"
+    )
+    basket = f" Basket: {record.basket_url}" if record.basket_url else ""
+    return send_sms(
+        to_phone,
+        (
+            f"Restock ready: {record.qty} {record.item_name} from "
+            f"{record.supplier_name} for {total}, {eta}. "
+            "Press Pico supply_buy to approve PaySponge payment."
+            f"{basket}"
+        ),
+    )
 
 
 def _payload_hash(body: dict[str, object]) -> str:

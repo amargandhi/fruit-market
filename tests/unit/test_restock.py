@@ -12,6 +12,8 @@ from fruit_market.restock.supplier import RestockQuote, StaticSupplierClient
 from fruit_market.services.factory import make_real_services
 from fruit_market.state.events import (
     RestockApproved,
+    RestockOperatorEmailed,
+    RestockOperatorEmailFailed,
     RestockOrdered,
     RestockPaymentFailed,
     RestockPaymentStarted,
@@ -80,6 +82,13 @@ def test_restock_projection_transitions() -> None:
         )
     )
     projection.apply(
+        RestockOperatorEmailed(
+            proposal_id=proposed.proposal_id,
+            to_email="operator@example.com",
+            message_id="mail_1",
+        )
+    )
+    projection.apply(
         RestockApproved(
             proposal_id=proposed.proposal_id,
             payload_hash=proposed.payload_hash,
@@ -110,6 +119,8 @@ def test_restock_projection_transitions() -> None:
     assert record is not None
     assert record.status == "ordered"
     assert record.sponge_plan_id == "plan_1"
+    assert record.email_status == "sent"
+    assert record.email_message_id == "mail_1"
     assert record.supplier_order_id == "sup_1"
 
 
@@ -126,6 +137,13 @@ def test_restock_projection_terminal_rejection_and_failure() -> None:
     )
     projection.apply(second)
     projection.apply(
+        RestockOperatorEmailFailed(
+            proposal_id=second.proposal_id,
+            to_email="operator@example.com",
+            reason="mail down",
+        )
+    )
+    projection.apply(
         RestockPaymentFailed(
             proposal_id=second.proposal_id,
             stage="payment",
@@ -133,6 +151,7 @@ def test_restock_projection_terminal_rejection_and_failure() -> None:
         )
     )
     assert projection.current_active().status == "failed"  # type: ignore[union-attr]
+    assert projection.current_active().email_status == "failed"  # type: ignore[union-attr]
 
 
 def test_disabled_restock_runtime_is_not_constructed(tmp_path: Path) -> None:
@@ -163,6 +182,96 @@ def test_stock_low_creates_locked_proposal_but_does_not_pay_before_pico(
     assert harness.sponge.submit_calls == 1
     assert harness.sponge.approve_calls == 0
     assert harness.sponge.pay_calls == 0
+
+
+def test_stock_low_stages_supplier_basket_and_emails_operator(tmp_path: Path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def notifier(to_email, record):  # type: ignore[no-untyped-def]
+        sent.append((to_email, record.basket_url))
+        return "mail_restock"
+
+    harness = _Harness(
+        tmp_path,
+        settings=replace(
+            _settings(),
+            operator_email="operator@example.com",
+            supplier_public_base="https://supplier.example",
+        ),
+        operator_notifier=notifier,
+    )
+    offset, event = harness.stock_low()
+
+    harness.coordinator.handle_stock_low(offset, event)
+
+    record = harness.projection.current_pending_approval()
+    assert record is not None
+    assert record.basket_url.startswith("https://supplier.example/basket?")
+    assert f"proposal_id={record.proposal_id}" in record.basket_url
+    assert "amount_cents=1200" in record.basket_url
+    assert record.eta_minutes == 30
+    assert record.email_status == "sent"
+    assert record.email_message_id == "mail_restock"
+    assert sent == [("operator@example.com", record.basket_url)]
+    assert harness.sponge.approve_calls == 0
+    assert harness.sponge.pay_calls == 0
+
+
+def test_stock_low_texts_operator_restock_details(tmp_path: Path) -> None:
+    sent: list[tuple[str, str, int, str]] = []
+
+    def sms_notifier(to_phone, record):  # type: ignore[no-untyped-def]
+        sent.append((to_phone, record.item_name, record.qty, record.basket_url))
+        return "sms_restock"
+
+    harness = _Harness(
+        tmp_path,
+        settings=replace(
+            _settings(),
+            operator_phone="+14155550100",
+            supplier_public_base="https://supplier.example",
+        ),
+        operator_sms_notifier=sms_notifier,
+    )
+    offset, event = harness.stock_low()
+
+    harness.coordinator.handle_stock_low(offset, event)
+
+    record = harness.projection.current_pending_approval()
+    assert record is not None
+    assert sent == [
+        ("+14155550100", "apple", 24, record.basket_url),
+    ]
+    assert harness.sponge.approve_calls == 0
+    assert harness.sponge.pay_calls == 0
+
+
+def test_operator_email_failure_does_not_block_pico_approval(tmp_path: Path) -> None:
+    def notifier(_to_email, _record):  # type: ignore[no-untyped-def]
+        raise RuntimeError("mail down")
+
+    harness = _Harness(
+        tmp_path,
+        settings=replace(
+            _settings(),
+            operator_email="operator@example.com",
+            supplier_public_base="https://supplier.example",
+        ),
+        operator_notifier=notifier,
+    )
+    offset, event = harness.stock_low()
+    harness.coordinator.handle_stock_low(offset, event)
+
+    record = harness.projection.current_pending_approval()
+    assert record is not None
+    assert record.email_status == "failed"
+    assert record.email_failure_reason == "operator email failed: mail down"
+
+    result = harness.coordinator.approve_pending(approved_by="pico")
+
+    assert result.ok is True
+    assert result.status == "ordered"
+    assert harness.sponge.pay_calls == 1
 
 
 def test_pico_approval_approves_sponge_plan_and_pays_once(tmp_path: Path) -> None:
@@ -276,6 +385,8 @@ class _Harness:
         *,
         settings: RestockSettings | None = None,
         supplier=None,  # type: ignore[no-untyped-def]
+        operator_notifier=None,  # type: ignore[no-untyped-def]
+        operator_sms_notifier=None,  # type: ignore[no-untyped-def]
     ) -> None:
         self.store = EventStore(tmp_path / "events.db")
         self.services = make_real_services(store=self.store)
@@ -289,6 +400,8 @@ class _Harness:
             catalog=self.services.catalog,
             supplier=supplier or StaticSupplierClient("https://supplier.x402.test/orders"),
             sponge=self.sponge,
+            operator_notifier=operator_notifier,
+            operator_sms_notifier=operator_sms_notifier,
         )
         self.item = self.services.teach.confirm(
             self.services.teach.propose("These are apples, $1.50, 6 of them").id
