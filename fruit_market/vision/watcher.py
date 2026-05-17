@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fruit_market.services.protocols import InventoryService, Item
-    from fruit_market.vision.camera import Camera
+    from fruit_market.vision.camera import CameraBackend
     from fruit_market.vision.model import PaliGemmaCounter
 
 
@@ -64,7 +64,7 @@ class VisionWatcher:
         *,
         catalog_active_item: Callable[[], Item | None],
         inventory: InventoryService,
-        camera: Camera,
+        camera: CameraBackend,
         model: PaliGemmaCounter,
         poll_interval_seconds: float | None = None,
         motion_threshold: float | None = None,
