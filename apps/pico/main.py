@@ -71,9 +71,13 @@ ACTION_KEY_TO_NAME = {
     KEY_READY: "ready",
 }
 
-# Indices that always emit even when their attention-flag is off.
-# Useful for "I want to repeat the last status" type buttons.
-ALWAYS_EMIT = {KEY_READY}
+# Every action key always emits. We let the backend decide whether
+# there's anything to act on (it returns status="no_pending" if
+# not). Earlier the firmware gated emits on the bridge having
+# pushed an "attention" payload, but that left the keypad feeling
+# dead on first boot — the operator presses a button, nothing
+# happens, and there's no feedback that the press was even seen.
+ALWAYS_EMIT = set(ACTION_KEY_TO_NAME.keys())
 
 # Color palette. Brightness is kept modest so the keypad is readable
 # in daylight without being a stage spotlight.
@@ -324,11 +328,6 @@ def poll_buttons(previous):
             action = ACTION_KEY_TO_NAME.get(index)
             if action is None:
                 continue  # press on a visual-only key is ignored
-            # Only emit when there's attention on this action, or
-            # when it's an always-emit key (e.g. ready).
-            attention = state.get("attention", {})
-            if not attention.get(action) and index not in ALWAYS_EMIT:
-                continue
             flash_index = index
             flash_until_ms = now_ms() + FLASH_DURATION_MS
             write_line({
