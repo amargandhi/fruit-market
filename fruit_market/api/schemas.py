@@ -143,10 +143,10 @@ class KioskStateSnapshot(_Schema):
     pending: PendingActions = Field(default_factory=PendingActions)
     restock: RestockView | None = None
     health: SystemHealth = Field(default_factory=SystemHealth)
-    # Demo control: streamer captures regardless, but inference
-    # (PaliGemma counting) only fires while ``demo_active`` is
-    # True. Flipped to True by the Pico START button (or by
-    # POST /api/demo/start from the kiosk fallback).
+    # "Open for phone orders" signal. NOT a gate on video or
+    # inference — both run from boot regardless. Flipped to True
+    # by the Pico READY button (or POST /api/demo/start) once
+    # the operator has finished stocking the shelf.
     demo_active: bool = False
 
 

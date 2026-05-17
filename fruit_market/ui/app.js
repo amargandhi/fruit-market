@@ -10,22 +10,15 @@ const state = {
 const els = {
   status: document.querySelector("#connection-status"),
   refresh: document.querySelector("#refresh-button"),
-  activeCount: document.querySelector("#active-count"),
-  activeLabel: document.querySelector("#active-label"),
   stockAlert: document.querySelector("#stock-alert"),
   restockPanel: document.querySelector("#restock-panel"),
   catalogList: document.querySelector("#catalog-list"),
   reserved: document.querySelector("#orders-reserved"),
   paid: document.querySelector("#orders-paid"),
   packed: document.querySelector("#orders-packed"),
-  teachForm: document.querySelector("#teach-form"),
-  teachInput: document.querySelector("#teach-input"),
-  teachProposal: document.querySelector("#teach-proposal"),
   cameraFeed: document.querySelector("#camera-feed"),
   cameraStatus: document.querySelector("#camera-status"),
   cameraCounts: document.querySelector("#camera-counts"),
-  cameraOverlayEmpty: document.querySelector("#camera-overlay-empty"),
-  demoNotStarted: document.querySelector("#demo-not-started"),
   demoStatePill: document.querySelector("#demo-state-pill"),
   startDemoButton: document.querySelector("#start-demo-button"),
   logList: document.querySelector("#log-list"),
@@ -36,7 +29,6 @@ const els = {
 };
 
 let eventSource = null;
-let activeProposal = null;
 
 function dollars(cents) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -69,37 +61,43 @@ async function loadState() {
 }
 
 function renderDemoGate() {
-  if (els.demoNotStarted) {
-    els.demoNotStarted.hidden = state.demo_active;
-  }
+  // demo_active is a SEMANTIC flag now ("open for phone orders"),
+  // not a video/inference gate. The camera streams and PaliGemma
+  // counts from boot regardless. This function just updates the
+  // pill + button so the operator can see + flip the signal.
   if (els.demoStatePill) {
     els.demoStatePill.dataset.state = state.demo_active ? "on" : "off";
     els.demoStatePill.innerHTML = state.demo_active
-      ? `<span class="dot"></span> Demo running`
-      : `<span class="dot"></span> Demo idle`;
+      ? `<span class="dot"></span> Open for orders`
+      : `<span class="dot"></span> Stocking`;
   }
   if (els.startDemoButton) {
-    els.startDemoButton.hidden = state.demo_active;
+    els.startDemoButton.textContent = state.demo_active
+      ? "↩ Back to stocking"
+      : "✓ Open for orders";
   }
 }
 
-async function startDemoFromKiosk() {
+async function toggleOpenForOrders() {
   try {
-    const res = await api("/api/demo/start", { method: "POST" });
+    const path = state.demo_active ? "/api/demo/stop" : "/api/demo/start";
+    const res = await api(path, { method: "POST" });
     state.demo_active = !!res.demo_active;
     renderDemoGate();
   } catch (err) {
-    console.error("failed to start demo:", err);
+    console.error("failed to toggle open-for-orders:", err);
   }
 }
 
 if (els.startDemoButton) {
-  els.startDemoButton.addEventListener("click", () => void startDemoFromKiosk());
+  els.startDemoButton.addEventListener("click", () => void toggleOpenForOrders());
 }
 
-// Poll demo state every 1.5s so the kiosk picks up Pico-driven starts
-// (the Pico bridge POSTs /api/pico/action, which sets demo_active
-// on the server; the SSE stream doesn't push that yet).
+// Poll demo state every 1.5s so the kiosk picks up Pico-driven
+// "open for orders" flips (the Pico bridge POSTs /api/pico/action,
+// which sets demo_active on the server; the SSE stream doesn't
+// push that yet). Video + AI counting are unaffected — this poll
+// only keeps the pill/button in sync.
 setInterval(async () => {
   try {
     const res = await api("/api/demo/active");
@@ -149,7 +147,8 @@ function connectStream() {
 
 function setStatus(text, className) {
   els.status.textContent = text;
-  els.status.className = `status ${className}`.trim();
+  els.status.className = "status-pill";
+  els.status.dataset.state = className === "online" ? "online" : "off";
 }
 
 function render() {
@@ -159,13 +158,10 @@ function render() {
 }
 
 function renderCatalog() {
-  const active = state.catalog.find((item) => item.item_id === state.active_item_id);
-  els.activeCount.textContent = active ? active.physical_count : 0;
-  els.activeLabel.textContent = active ? active.name : "No active item";
   els.stockAlert.hidden = !state.catalog.some((item) => item.is_low);
 
   if (state.catalog.length === 0) {
-    els.catalogList.innerHTML = `<div class="empty">No items taught</div>`;
+    els.catalogList.innerHTML = `<div class="empty">Waiting for first AI count…</div>`;
     return;
   }
   els.catalogList.innerHTML = state.catalog
@@ -285,51 +281,9 @@ function renderOrderGroup(container, orders) {
     .join("");
 }
 
-function renderProposal() {
-  if (!activeProposal) {
-    els.teachProposal.hidden = true;
-    els.teachProposal.innerHTML = "";
-    return;
-  }
-  els.teachProposal.hidden = false;
-  els.teachProposal.innerHTML = `
-    <div class="row-main">
-      <strong>${escapeHtml(activeProposal.name)}</strong>
-      <span>${dollars(activeProposal.price_cents)}</span>
-    </div>
-    <div class="row-meta">
-      <span>${activeProposal.initial_count} in stock</span>
-      <span>Restock at ${activeProposal.reorder_threshold}</span>
-    </div>
-    <div class="proposal-actions">
-      <button type="button" data-confirm-teach>Confirm</button>
-      <button class="secondary" type="button" data-reject-teach>Reject</button>
-    </div>
-  `;
-}
-
-async function proposeTeach(event) {
-  event.preventDefault();
-  const transcript = els.teachInput.value.trim();
-  if (!transcript) return;
-  activeProposal = (await api("/api/teach", {
-    method: "POST",
-    body: JSON.stringify({ transcript }),
-  })).proposal;
-  renderProposal();
-}
-
-async function confirmTeach() {
-  if (!activeProposal) return;
-  await api("/api/teach/confirm", {
-    method: "POST",
-    body: JSON.stringify({ proposal_id: activeProposal.proposal_id }),
-  });
-  activeProposal = null;
-  els.teachInput.value = "";
-  renderProposal();
-  await loadState();
-}
+// Teach panel was removed from the UI — apple + banana are seeded
+// at boot. The POST /api/teach endpoint still works for power
+// users (or future re-introduction).
 
 async function switchActive(itemId) {
   await api("/api/active-item", {
@@ -379,29 +333,33 @@ document.addEventListener("click", (event) => {
   const packId = target.dataset.pack;
   if (switchId) void switchActive(switchId);
   if (packId) void packOrder(packId);
-  if (target.dataset.confirmTeach !== undefined) void confirmTeach();
   if (target.dataset.approveRestock !== undefined) void picoAction("supply_buy");
   if (target.dataset.rejectRestock !== undefined) void picoAction("cancel");
-  if (target.dataset.rejectTeach !== undefined) {
-    activeProposal = null;
-    renderProposal();
-  }
 });
 
 els.refresh.addEventListener("click", () => void loadState());
-els.teachForm.addEventListener("submit", (event) => void proposeTeach(event));
 
 void loadState();
 connectStream();
 
 // ─── Live camera feed ───────────────────────────────────────────────
-// The streamer captures continuously at 1-5 FPS (per backend) into a
-// JPEG cache. We poll the cache every 500 ms — so the browser sees
-// fresh frames at the streamer's rate, decoupled from the model loop.
-// Each PaliGemma tick (~3 s) updates the catalog counts via SSE;
-// those drive the overlay chips.
+// The streamer captures continuously at 5-10 FPS (per backend) into a
+// JPEG cache. We poll the cache every 200 ms — the streamer's daemon
+// backend produces 10 FPS, so polling at 5 Hz gives the browser
+// roughly half of those frames. (Faster than 200 ms wastes bandwidth
+// without visible benefit; slower than 250 ms makes a static scene
+// look frozen to operators.)
+//
+// Every successful frame load bumps a visible counter + age display
+// so the operator can SEE the feed is live even when nothing in the
+// scene is moving. Without that, a still bowl of fruit looks frozen.
 
-const CAMERA_POLL_MS = 500;
+const CAMERA_POLL_MS = 200;
+let cameraFrameCount = 0;
+let cameraLastSwapMs = 0;
+const cameraFrameCountEl = document.querySelector("#camera-frame-count");
+const cameraFrameAgeEl = document.querySelector("#camera-frame-age");
+const cameraFrameMeterEl = document.querySelector("#camera-frame-meter");
 
 const FRUIT_ICONS = {
   apple: "🍎",
@@ -439,9 +397,7 @@ function refreshCameraFeed() {
 
 function refreshCameraOverlay() {
   if (!els.cameraCounts) return;
-  const empty = !state.catalog || state.catalog.length === 0;
-  if (els.cameraOverlayEmpty) els.cameraOverlayEmpty.hidden = !empty;
-  if (empty) {
+  if (!state.catalog || state.catalog.length === 0) {
     els.cameraCounts.innerHTML = "";
     return;
   }
@@ -463,15 +419,34 @@ function refreshCameraOverlay() {
 
 if (els.cameraFeed) {
   els.cameraFeed.addEventListener("error", () => {
+    els.cameraFeed.dataset.state = "offline";
     if (els.cameraStatus) {
       els.cameraStatus.textContent = "starting…";
       els.cameraStatus.dataset.state = "off";
     }
   });
   els.cameraFeed.addEventListener("load", () => {
+    els.cameraFeed.dataset.state = "live";
     if (els.cameraStatus) {
       els.cameraStatus.textContent = "live";
       els.cameraStatus.dataset.state = "live";
+    }
+    // Every successful frame load bumps the meter so the operator
+    // sees the feed is alive even when the scene is static. The
+    // dot pulse fires via CSS animation re-trigger.
+    const now = performance.now();
+    cameraFrameCount += 1;
+    if (cameraFrameCountEl) cameraFrameCountEl.textContent = cameraFrameCount.toString();
+    if (cameraFrameAgeEl) {
+      const dtMs = cameraLastSwapMs ? Math.round(now - cameraLastSwapMs) : 0;
+      cameraFrameAgeEl.textContent = `${dtMs}ms gap`;
+    }
+    cameraLastSwapMs = now;
+    if (cameraFrameMeterEl) {
+      cameraFrameMeterEl.classList.remove("pulse");
+      // Force reflow so the animation actually re-triggers
+      void cameraFrameMeterEl.offsetWidth;
+      cameraFrameMeterEl.classList.add("pulse");
     }
   });
   refreshCameraFeed();

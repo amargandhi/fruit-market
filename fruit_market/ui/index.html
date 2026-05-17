@@ -4,26 +4,40 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Fruit Market Kiosk</title>
-    <link rel="icon" href="data:," />
+    <meta name="theme-color" content="#0f1614" />
+    <meta property="og:title" content="Fruit Market" />
+    <meta property="og:image" content="/assets/fruit-market-icon.png" />
+    <link rel="icon" type="image/png" href="/assets/favicon.png" />
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
         <div class="brand">
-          <h1>🍓 Fruit Market</h1>
-          <p class="tagline">Physical AI agent — vision, voice, payments.</p>
+          <img
+            class="brand-logo"
+            src="/assets/fruit-market-icon.png"
+            alt=""
+            width="56"
+            height="56"
+            aria-hidden="true"
+          />
+          <div class="brand-copy">
+            <h1>Fruit Market</h1>
+            <p class="tagline">Physical AI agent — vision, voice, payments.</p>
+          </div>
         </div>
         <div class="status-cluster">
           <span id="connection-status" class="status-pill" data-state="off">Connecting</span>
-          <span id="demo-state-pill" class="status-pill demo-state" data-state="off">
-            <span class="dot"></span> Demo idle
-          </span>
           <span id="edge-ai-pill" class="status-pill edge">
-            <span class="dot"></span> Edge AI
+            <span class="dot"></span> Edge AI live
           </span>
-          <button id="start-demo-button" class="primary-button" type="button" hidden>
-            ▶ Start Demo
+          <span id="demo-state-pill" class="status-pill demo-state" data-state="off">
+            <span class="dot"></span> Stocking
+          </span>
+          <button id="start-demo-button" class="primary-button" type="button">
+            ✓ Open for orders
           </button>
           <button id="refresh-button" class="ghost-button" type="button" aria-label="Refresh state">
             Refresh
@@ -37,25 +51,19 @@
           <div class="panel-heading">
             <h2 id="camera-title">Live Camera Feed</h2>
             <span id="camera-status" class="camera-status">starting…</span>
+            <span id="camera-frame-meter" class="camera-frame-meter">
+              <span class="meter-dot"></span>
+              <span id="camera-frame-count">0</span> frames ·
+              <span id="camera-frame-age">—</span>
+            </span>
           </div>
           <div class="camera-frame">
             <img
               id="camera-feed"
               alt="Live camera frame from the stall"
+              data-state="offline"
               draggable="false"
             />
-            <div id="camera-overlay-empty" class="camera-overlay-empty" hidden>
-              No items taught yet
-            </div>
-            <div id="demo-not-started" class="demo-not-started" hidden>
-              <div class="not-started-card">
-                <p class="not-started-title">Camera streaming · Edge AI on standby</p>
-                <p class="not-started-hint">
-                  Press <strong>READY</strong> on the Pico to begin counting,
-                  or use the button at the top of the screen.
-                </p>
-              </div>
-            </div>
             <div id="camera-counts" class="camera-counts" aria-live="polite"></div>
           </div>
           <p class="camera-caption">
@@ -72,31 +80,16 @@
             <span id="stock-alert" class="stock-alert" hidden>Restock needed</span>
           </div>
           <div id="catalog-list" class="catalog-grid">
-            <div class="catalog-empty">Teach an item to begin →</div>
+            <div class="catalog-empty">Waiting for first AI count…</div>
           </div>
           <div id="restock-panel" class="restock-panel" hidden></div>
         </section>
 
-        <!-- ─── Side rail: teach + orders ─────────────────────────── -->
+        <!-- ─── Side rail: orders + activity + log ───────────────────
+             The Teach panel was removed — apple + banana are seeded
+             at boot so the demo "just works" with no setup. Teach
+             remains available via POST /api/teach for power users. -->
         <aside class="side-rail">
-          <section id="teach-panel" class="panel teach-panel" aria-labelledby="teach-title">
-            <div class="panel-heading">
-              <h2 id="teach-title">Teach an Item</h2>
-            </div>
-            <form id="teach-form" class="teach-form">
-              <label for="teach-input" class="sr-only">Item description</label>
-              <textarea
-                id="teach-input"
-                name="transcript"
-                rows="3"
-                placeholder="These are apples, $1.50, 6 of them"
-                required
-              ></textarea>
-              <button type="submit" class="primary-button">Propose</button>
-            </form>
-            <div id="teach-proposal" class="proposal" hidden></div>
-          </section>
-
           <section id="orders-panel" class="panel orders-panel" aria-labelledby="orders-title">
             <div class="panel-heading">
               <h2 id="orders-title">Orders</h2>

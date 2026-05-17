@@ -82,11 +82,31 @@ html, body {
   border-bottom: 1px solid var(--panel-edge);
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 240px;
+}
+
+.brand-logo {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  display: block;
+  border-radius: 14px;
+  filter: drop-shadow(0 8px 18px rgba(0, 0, 0, 0.28));
+}
+
+.brand-copy {
+  min-width: 0;
+}
+
 .brand h1 {
   margin: 0;
   font-size: 26px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .brand .tagline {
@@ -98,6 +118,8 @@ html, body {
 .status-cluster {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -224,6 +246,46 @@ html, body {
   border-color: rgba(240, 178, 80, 0.35);
 }
 
+/* Live frame meter — shows total frames received + gap since the
+   last one. The dot pulses on every successful image load so the
+   feed is undeniably live even with a static scene. */
+
+.camera-frame-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(127, 200, 138, 0.08);
+  border: 1px solid rgba(127, 200, 138, 0.28);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-frame-meter .meter-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  opacity: 0.45;
+  transition: opacity 0.08s ease-out;
+}
+
+.camera-frame-meter.pulse .meter-dot {
+  animation: meter-pulse 0.4s ease-out;
+}
+
+@keyframes meter-pulse {
+  0%   { opacity: 1;    transform: scale(1.6); }
+  60%  { opacity: 1;    transform: scale(1);   }
+  100% { opacity: 0.45; transform: scale(1);   }
+}
+
 .camera-frame {
   position: relative;
   border-radius: 10px;
@@ -235,11 +297,26 @@ html, body {
   justify-content: center;
 }
 
+.camera-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.68)),
+    url("/assets/fruit-market-icon.png") center / min(220px, 36%) no-repeat;
+  opacity: 0.82;
+}
+
 .camera-frame img {
+  position: relative;
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.camera-frame img[data-state="offline"] {
+  opacity: 0;
 }
 
 .camera-overlay-empty {
@@ -254,57 +331,10 @@ html, body {
   letter-spacing: 0.12em;
 }
 
-/* "Demo not started" overlay — camera is streaming below, but
-   inference is gated. Press READY on the Pico (or the kiosk
-   button) to open the gate. Sits as a translucent layer so the
-   live video is still visible behind it. */
-
-.demo-not-started {
-  position: absolute;
-  inset: 0;
-  background: rgba(15, 22, 20, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 2;
-  backdrop-filter: blur(2px);
-}
-
-.not-started-card {
-  pointer-events: auto;
-  padding: 18px 26px;
-  border-radius: 14px;
-  background: rgba(15, 22, 20, 0.88);
-  border: 1px solid var(--accent);
-  box-shadow: 0 0 0 4px rgba(127, 200, 138, 0.15);
-  max-width: 520px;
-  text-align: center;
-}
-
-.not-started-title {
-  margin: 0 0 6px;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--accent);
-  letter-spacing: 0.02em;
-}
-
-.not-started-hint {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text);
-  opacity: 0.85;
-}
-
-.not-started-hint strong {
-  color: var(--accent);
-  letter-spacing: 0.05em;
-}
-
-.demo-state {
-  /* same shape as connection-status; gate animation matches */
-}
+/* "Open for orders" pill state — purely semantic, never blocks
+   the video or AI counting underneath. Amber while stocking,
+   green once the operator hits READY on the Pico (or clicks the
+   button in the kiosk header). */
 
 .demo-state[data-state="off"] .dot {
   background: var(--warning);
@@ -797,6 +827,22 @@ html, body {
 /* ─── Responsive (single-column on narrow screens) ──────── */
 
 @media (max-width: 900px) {
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .brand-logo {
+    width: 48px;
+    height: 48px;
+    flex-basis: 48px;
+    border-radius: 12px;
+  }
+
+  .status-cluster {
+    justify-content: flex-start;
+  }
+
   .board {
     grid-template-columns: 1fr;
     grid-template-areas:

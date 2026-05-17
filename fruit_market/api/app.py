@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
@@ -20,8 +21,49 @@ from fruit_market.state.store import open_default_store
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from fruit_market.services.protocols import Services
+
 
 logger = logging.getLogger(__name__)
+load_dotenv()
+
+
+# ─── Default fruit seeded at boot ──────────────────────────────────
+#
+# The watcher counts whatever's in the catalog. To make the demo
+# "just work" — no teach step required — we seed two default fruits
+# at boot if they're not already present. The user can teach more,
+# but apples + bananas always exist so PaliGemma has something to
+# count the moment the kiosk loads.
+#
+# Each tuple is (name, dollars, initial_count). Initial count is
+# zero — the model will overwrite it with the real count on the
+# first watcher tick.
+_DEFAULT_FRUIT: list[tuple[str, float, int]] = [
+    ("apple", 1.00, 0),
+    ("banana", 0.75, 0),
+]
+
+
+def _ensure_default_fruit(services: Services) -> None:
+    """Idempotently seed apple + banana into the catalog at boot.
+
+    Looks each fruit up by name; if it doesn't exist, proposes +
+    confirms a teach so the ItemTaught event lands in the store.
+    Safe to call on every boot — existing fruit are skipped.
+    """
+
+    existing = {item.name.lower() for item in services.catalog.list_items()}
+    for name, dollars, count in _DEFAULT_FRUIT:
+        if name.lower() in existing:
+            continue
+        # ``parse_transcript`` understands "$X.YZ" + "N of them";
+        # we go through the teach path so the events look exactly
+        # like a human teach (one ItemTaught + one ActiveItemSet).
+        transcript = f"These are {name}, ${dollars:.2f}, {count} of them"
+        proposal = services.teach.propose(transcript)
+        services.teach.confirm(proposal.id)
+        logger.info("seeded default catalog item: %s @ $%.2f", name, dollars)
 
 
 @asynccontextmanager
@@ -36,10 +78,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     serving requests immediately while the model loads (~5 s) so
     the kiosk doesn't appear frozen.
 
-    ``app.state.demo_active`` is the on/off switch that gates
-    *inference* (the streamer keeps capturing regardless). The
-    Pico START button flips this to True via ``/api/demo/start``;
-    the kiosk shows a "Press START" overlay until then.
+    Video AND inference run from the moment the app boots — there
+    is no "start" gate. ``app.state.demo_active`` is a semantic
+    flag only: it means "operator has confirmed the shelf and is
+    ready to take phone orders." The Pico READY button flips it
+    to True. The model never stops counting, the camera never
+    stops streaming, and inventory keeps reconciling regardless.
     """
 
     event_store = None
@@ -53,8 +97,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.event_store = event_store
     app.state.restock = None
     app.state.vision = None
-    # The streamer captures whether or not the demo is "started".
-    # Inference (PaliGemma counts) is gated by this flag.
+
+    # Seed apple + banana so the watcher has something to count
+    # from boot — no manual teach required. Idempotent.
+    _ensure_default_fruit(services)
+    # "Ready for phone orders" flag. NOT a video/inference gate —
+    # both run from boot. Operator confirms the shelf via the
+    # Pico READY button, which flips this to True.
     app.state.demo_active = (
         os.environ.get("FM_DEMO_AUTOSTART", "0") == "1"
     )
@@ -74,10 +123,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             from fruit_market.vision import build_default_vision
 
-            app.state.vision = await build_default_vision(
-                services,
-                gate=lambda: bool(getattr(app.state, "demo_active", False)),
-            )
+            # No `gate=` kwarg → the watcher's default is always-open,
+            # so PaliGemma starts counting the moment the model
+            # finishes warmup. The kiosk shows fresh counts without
+            # the operator having to "start" anything.
+            app.state.vision = await build_default_vision(services)
             logger.info("vision pipeline started")
         except Exception as exc:  # noqa: BLE001
             # Don't fail the app if the vision deps are missing

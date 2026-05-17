@@ -38,19 +38,26 @@ def _seed_reserved_order(client: TestClient) -> str:
     return order.id
 
 
-def test_ready_action_starts_demo() -> None:
+def test_ready_action_flips_open_for_orders() -> None:
+    """READY = "shelf confirmed; open for phone orders."
+
+    Note this does NOT gate video or inference (both run from
+    boot regardless). It only flips the semantic ``demo_active``
+    flag the kiosk surfaces as the "Open for orders" pill.
+    """
+
     with TestClient(app) as client:
-        # First press flips demo_active to True with status="started".
+        # First press flips demo_active to True with status="ready".
         response = client.post("/api/pico/action", json={"action": "ready"})
         assert response.status_code == 200
         body = response.json()
         assert body["action"] == "ready"
-        assert body["status"] == "started"
-        # Demo is now active.
+        assert body["status"] == "ready"
+        # Flag is now on.
         assert client.get("/api/demo/active").json()["demo_active"] is True
         # Second press is idempotent.
         again = client.post("/api/pico/action", json={"action": "ready"}).json()
-        assert again["status"] == "already_started"
+        assert again["status"] == "already_ready"
 
 
 def test_demo_start_stop_endpoints() -> None:

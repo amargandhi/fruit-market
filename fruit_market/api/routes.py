@@ -247,8 +247,12 @@ def camera_status(request: Request) -> dict[str, object]:
 
 @router.post("/demo/start", response_model=DemoStateResponse)
 def demo_start(request: Request) -> DemoStateResponse:
-    """Open the inference gate. Streamer was already running; this
-    is what lets PaliGemma actually start counting."""
+    """Mark the shelf as confirmed → ready for phone orders.
+
+    Does NOT gate video or inference (both run from boot). This
+    flag is consumed by the phone agent / kiosk pill as a
+    "store open" signal.
+    """
 
     request.app.state.demo_active = True
     return DemoStateResponse(demo_active=True)
@@ -256,7 +260,11 @@ def demo_start(request: Request) -> DemoStateResponse:
 
 @router.post("/demo/stop", response_model=DemoStateResponse)
 def demo_stop(request: Request) -> DemoStateResponse:
-    """Close the inference gate. Video keeps streaming."""
+    """Mark the shelf as no-longer-ready for phone orders.
+
+    Video and inference continue uninterrupted; only the
+    "ready for orders" signal flips off.
+    """
 
     request.app.state.demo_active = False
     return DemoStateResponse(demo_active=False)
@@ -288,16 +296,15 @@ def pico_action(request: Request, payload: PicoActionRequest) -> PicoActionRespo
     action = payload.action
 
     if action == "ready":
-        # ``ready`` doubles as the demo START button — the operator
-        # presses it to open the inference gate when they're ready
-        # for the AI to begin counting. Idempotent: a second press
-        # is a no-op.
+        # ``ready`` = "I'm done stocking the shelf, take orders now."
+        # Video + inference were already running from boot; this
+        # only flips the "open for orders" signal. Idempotent.
         was_active = bool(getattr(request.app.state, "demo_active", False))
         request.app.state.demo_active = True
         return PicoActionResponse(
             action=action,
-            status="started" if not was_active else "already_started",
-            detail="demo inference gate opened",
+            status="ready" if not was_active else "already_ready",
+            detail="shelf confirmed; open for phone orders",
         )
 
     if action == "packed":
