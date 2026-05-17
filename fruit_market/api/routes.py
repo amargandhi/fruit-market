@@ -119,6 +119,27 @@ def switch_active_item(
     return SwitchActiveItemResponse(item_id=payload.item_id)
 
 
+# ─── Vision activity (deltas only) ─────────────────────────────────
+
+
+@router.get("/vision/activity")
+def vision_activity(request: Request, limit: int = 20) -> dict[str, object]:
+    """Recent count CHANGES for the kiosk's Activity panel.
+
+    Distinct from ``/api/vision/log`` (which shows every CountSet,
+    including reads that are equal to the previous count). This one
+    only returns events where the count moved — exactly what judges
+    want to see ("the AI noticed something happened").
+    """
+
+    vision = get_vision(request.app)
+    if vision is None:
+        return {"entries": []}
+    changes = list(vision.watcher.status.recent_changes)
+    # Newest first, capped at ``limit``.
+    return {"entries": list(reversed(changes))[: max(1, min(limit, 200))]}
+
+
 # ─── Vision count log ──────────────────────────────────────────────
 
 

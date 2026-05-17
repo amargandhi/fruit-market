@@ -158,6 +158,13 @@ flash_until_ms = 0
 FLASH_DURATION_MS = 140
 
 
+# Bridge-pushed flashes: short LED pulses painted on top of the
+# idle render to punctuate count changes (green=added, amber=removed,
+# red=out-of-stock). Each entry:
+#   {"index": 0-15, "color": (r,g,b), "until_ms": deadline}
+active_flashes = []
+
+
 # ─── Helpers ────────────────────────────────────────────────────────
 
 
@@ -294,6 +301,27 @@ def paint_health(ts):
         set_pad(HEALTH_ERROR, COLOR_DIM_GREY)
 
 
+def paint_flashes(ts):
+    """Paint any active bridge-pushed flashes on top of the idle layout.
+
+    A flash is the bridge's way of punctuating a count change —
+    green for added/restocked, amber for removed, red for
+    out-of-stock. Each flash has a deadline (until_ms) and gets
+    dropped from the list once it expires.
+    """
+
+    if not active_flashes:
+        return
+    still_active = []
+    for flash in active_flashes:
+        if ts >= flash["until_ms"]:
+            continue
+        set_pad(flash["index"], flash["color"])
+        still_active.append(flash)
+    # Mutate in place so the global var keeps a single identity.
+    active_flashes[:] = still_active
+
+
 def paint():
     if keypad is None:
         return
@@ -305,6 +333,7 @@ def paint():
     paint_actions(ts)
     paint_stock(ts)
     paint_health(ts)
+    paint_flashes(ts)
     if flash_index >= 0 and ts < flash_until_ms:
         set_pad(flash_index, COLOR_WHITE)
     keypad.update()
@@ -378,6 +407,27 @@ def apply_host_payload(payload):
             "health": payload.get("health", state.get("health", {})),
             "error_message": payload.get("error_message", ""),
         }
+        # Schedule any flashes the bridge pushed in this payload.
+        # Each entry: {"index", "color": [r,g,b], "duration_ms"}.
+        flashes = payload.get("flashes") or []
+        if isinstance(flashes, list):
+            ts = now_ms()
+            for f in flashes:
+                if not isinstance(f, dict):
+                    continue
+                try:
+                    idx = int(f.get("index", -1))
+                    color = f.get("color") or [0, 0, 0]
+                    dur = int(f.get("duration_ms", 600))
+                except (TypeError, ValueError):
+                    continue
+                if idx < 0 or len(color) < 3:
+                    continue
+                active_flashes.append({
+                    "index": idx,
+                    "color": (int(color[0]), int(color[1]), int(color[2])),
+                    "until_ms": ts + dur,
+                })
     elif event == "error":
         state["error_message"] = payload.get("message", "error")
 

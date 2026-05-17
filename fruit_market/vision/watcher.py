@@ -58,6 +58,40 @@ class WatcherStatus:
     # longer than ``heartbeat_seconds``, force one through anyway so
     # the dashboard doesn't show a stale value indefinitely.
     last_count_at_monotonic: float = field(default=0.0)
+    # Ring buffer of the most recent count CHANGES (not every count).
+    # Powers the kiosk's "Activity" panel and the Pico's flash-on-
+    # change LED. Each entry: {item_name, prev, new, delta, kind, ts}
+    # where kind is one of "added" | "removed" | "out" | "restocked"
+    # | "first_seen". Capped at MAX_CHANGE_HISTORY so a long-running
+    # watcher doesn't grow unbounded.
+    recent_changes: list[dict[str, object]] = field(default_factory=list)
+
+
+MAX_CHANGE_HISTORY = 50
+
+
+def _classify_change(prev: int | None, new: int) -> str:
+    """Map a (prev, new) pair to one of the demo-legible kinds.
+
+    Judging shorthand:
+      first_seen → first time we counted this noun
+      restocked  → was 0, now > 0 (replenishment)
+      out        → was > 0, now 0 (alarm)
+      added      → went up
+      removed    → went down
+    """
+
+    if prev is None:
+        return "first_seen"
+    if prev > 0 and new == 0:
+        return "out"
+    if prev == 0 and new > 0:
+        return "restocked"
+    if new > prev:
+        return "added"
+    if new < prev:
+        return "removed"
+    return "unchanged"
 
 
 class VisionWatcher:
@@ -216,6 +250,7 @@ class VisionWatcher:
         # others. We reconcile per item so the catalog updates piece
         # by piece if a later call hangs.
         counts: dict[str, int] = {}
+        change_ts = time.time()
         for item in items_to_count:
             try:
                 count = await loop.run_in_executor(
@@ -225,6 +260,28 @@ class VisionWatcher:
                 logger.exception("model count failed for %r", item.name)
                 continue
             counts[item.name] = count
+
+            # Detect change vs the previous tick. Anything other than
+            # "unchanged" lands in the ring buffer that powers the
+            # judge-facing Activity panel + the Pico's flash LED.
+            prev_count = self.status.last_counts.get(item.name)
+            kind = _classify_change(prev_count, count)
+            if kind != "unchanged":
+                self.status.recent_changes.append({
+                    "ts": change_ts,
+                    "item_id": item.id,
+                    "item_name": item.name,
+                    "prev": prev_count,
+                    "new": count,
+                    "delta": count - (prev_count or 0),
+                    "kind": kind,
+                })
+                # Trim the ring buffer.
+                if len(self.status.recent_changes) > MAX_CHANGE_HISTORY:
+                    self.status.recent_changes = self.status.recent_changes[
+                        -MAX_CHANGE_HISTORY:
+                    ]
+
             self._inventory.reconcile_physical_count(
                 item_id=item.id,
                 count=count,

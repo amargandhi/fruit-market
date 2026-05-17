@@ -30,6 +30,8 @@ const els = {
   startDemoButton: document.querySelector("#start-demo-button"),
   logList: document.querySelector("#log-list"),
   logMeta: document.querySelector("#log-meta"),
+  activityList: document.querySelector("#activity-list"),
+  activityMeta: document.querySelector("#activity-meta"),
   cameraPoll: document.querySelector("#camera-poll"),
 };
 
@@ -538,4 +540,80 @@ async function refreshLog() {
 if (els.logList) {
   void refreshLog();
   setInterval(() => void refreshLog(), LOG_POLL_MS);
+}
+
+// ─── Activity panel (count CHANGES only) ───────────────────────────
+// Polls /api/vision/activity every 1s. Each entry has a kind:
+//   added → 🍎 banana: 3 → 4 (ADDED 1)        green
+//   removed → 🍌 banana: 3 → 2 (REMOVED 1)    amber
+//   out → 🍎 apple: 1 → 0 (OUT OF STOCK)      red
+//   restocked → 🍎 apple: 0 → 4 (RESTOCKED)   green pulse
+//   first_seen → 🍌 banana: — → 3 (FIRST SEEN) grey
+
+const ACTIVITY_POLL_MS = 1000;
+const ACTIVITY_FRESH_WINDOW_MS = 3000;
+const ACTIVITY_MAX_ROWS = 10;
+
+const KIND_LABEL = {
+  added: "Added",
+  removed: "Removed",
+  out: "Out of stock",
+  restocked: "Restocked",
+  first_seen: "First seen",
+};
+
+function activityNarrative(entry) {
+  const prev = entry.prev === null || entry.prev === undefined ? "—" : entry.prev;
+  const next = entry.new;
+  const delta = entry.delta;
+  switch (entry.kind) {
+    case "added":     return `Added ${delta}`;
+    case "removed":   return `Removed ${Math.abs(delta)}`;
+    case "out":       return `Out of stock`;
+    case "restocked": return `Restocked +${delta}`;
+    default:          return KIND_LABEL[entry.kind] || entry.kind;
+  }
+}
+
+async function refreshActivity() {
+  if (!els.activityList) return;
+  let entries;
+  try {
+    const res = await fetch("/api/vision/activity?limit=" + ACTIVITY_MAX_ROWS);
+    if (!res.ok) return;
+    const data = await res.json();
+    entries = Array.isArray(data.entries) ? data.entries : [];
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  const html = entries
+    .slice(0, ACTIVITY_MAX_ROWS)
+    .map((e) => {
+      const ts = e.ts ? e.ts * 1000 : 0;
+      const fresh = ts && now - ts < ACTIVITY_FRESH_WINDOW_MS;
+      const icon = fruitIcon(e.item_name);
+      const prev = e.prev === null || e.prev === undefined ? "—" : e.prev;
+      return `
+        <div class="activity-row${fresh ? " fresh" : ""}" data-kind="${e.kind}">
+          <span class="ts">${formatTime(new Date(ts).toISOString())}</span>
+          <div class="narrative">
+            <span class="item">${icon} ${e.item_name}</span>
+            <span class="detail">${activityNarrative(e)}</span>
+          </div>
+          <span class="arrow">${prev} → ${e.new}</span>
+        </div>`;
+    })
+    .join("");
+  els.activityList.innerHTML = html;
+  if (els.activityMeta) {
+    els.activityMeta.textContent = entries.length
+      ? `${entries.length} change${entries.length === 1 ? "" : "s"}`
+      : "";
+  }
+}
+
+if (els.activityList) {
+  void refreshActivity();
+  setInterval(() => void refreshActivity(), ACTIVITY_POLL_MS);
 }

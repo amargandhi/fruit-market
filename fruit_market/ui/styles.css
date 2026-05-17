@@ -610,6 +610,89 @@ html, body {
 
 .order-card + .order-card { margin-top: 4px; }
 
+/* ─── Activity panel (count CHANGES, judge-friendly) ────── */
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.activity-list:empty::before {
+  content: "Waiting for the first count change…";
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border-left: 4px solid var(--panel-edge);
+  transition: background 0.2s ease;
+}
+
+.activity-row.fresh {
+  background: rgba(127, 200, 138, 0.10);
+  animation: activity-flash 0.7s ease-out;
+}
+
+.activity-row[data-kind="added"]     { border-left-color: var(--accent); }
+.activity-row[data-kind="removed"]   { border-left-color: var(--warning); }
+.activity-row[data-kind="out"]       { border-left-color: var(--danger);
+                                       background: rgba(227, 106, 106, 0.12); }
+.activity-row[data-kind="restocked"] { border-left-color: var(--accent);
+                                       background: rgba(127, 200, 138, 0.10); }
+.activity-row[data-kind="first_seen"]{ border-left-color: var(--muted); }
+
+@keyframes activity-flash {
+  0%   { background: rgba(127, 200, 138, 0.35); }
+  100% { background: rgba(127, 200, 138, 0.10); }
+}
+
+.activity-row .ts {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.activity-row .narrative {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-row .narrative .item {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.activity-row .narrative .detail {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.activity-row .arrow {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.activity-row[data-kind="added"]     .arrow { color: var(--accent); }
+.activity-row[data-kind="removed"]   .arrow { color: var(--warning); }
+.activity-row[data-kind="out"]       .arrow { color: var(--danger); }
+.activity-row[data-kind="restocked"] .arrow { color: var(--accent); }
+
 /* ─── Vision log ────────────────────────────────────────── */
 
 .log-panel { padding-bottom: 14px; }
