@@ -33,6 +33,11 @@ vision = [
     "opencv-python>=4.10",
 ]
 
+# USB-serial bridge to the Pico keypad sidecar.
+hardware = [
+    "pyserial>=3.5",
+]
+
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -61,7 +66,7 @@ warn_unused_ignores = true
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["mlx_vlm.*", "cv2.*"]
+module = ["mlx_vlm.*", "cv2", "cv2.*", "PIL", "PIL.*", "serial", "serial.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
