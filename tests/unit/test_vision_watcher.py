@@ -36,7 +36,13 @@ class _FakeCamera:
 @dataclass
 class _FakeModel:
     """Returns counts from a queue, falling back to ``default`` when
-    the queue is empty."""
+    the queue is empty.
+
+    Implements both ``count`` (single-noun) and ``count_batch`` (the
+    multi-noun fast path the watcher actually uses). ``count_batch``
+    loops through ``count`` so per-noun call accounting still works
+    in tests.
+    """
 
     counts: list[int] = field(default_factory=list)
     default: int = 0
@@ -45,6 +51,9 @@ class _FakeModel:
     def count(self, image: bytes, noun: str) -> int:
         self.calls.append((image, noun))
         return self.counts.pop(0) if self.counts else self.default
+
+    def count_batch(self, image: bytes, nouns: list[str]) -> dict[str, int]:
+        return {noun: self.count(image, noun) for noun in nouns}
 
 
 @pytest.mark.asyncio
@@ -174,6 +183,9 @@ async def test_watcher_survives_model_exception(tmp_path) -> None:
 
     class _BoomModel:
         def count(self, image: bytes, noun: str) -> int:
+            raise RuntimeError("model misfire")
+
+        def count_batch(self, image: bytes, nouns: list[str]) -> dict[str, int]:
             raise RuntimeError("model misfire")
 
     camera = _FakeCamera()

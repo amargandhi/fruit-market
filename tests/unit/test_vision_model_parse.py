@@ -13,8 +13,10 @@ import time
 
 from fruit_market.vision.model import (
     COUNT_PROMPT,
+    DETECT_PROMPT,
     PaliGemmaCounter,
     _coerce_text,
+    _LOC_TOKEN_RE,
 )
 
 
@@ -44,6 +46,38 @@ def test_count_prompt_starts_with_image_token() -> None:
     this prefix; we match it."""
 
     assert COUNT_PROMPT.startswith("<image>")
+    assert DETECT_PROMPT.startswith("<image>")
+
+
+def test_detect_loc_token_regex_counts_three_bananas() -> None:
+    """``detect {noun}`` returns 4 ``<loc####>`` tokens per detected
+    instance, followed by the noun. We count instances by counting
+    location-token groups and dividing by 4."""
+
+    response = (
+        "<loc0123><loc0456><loc0789><loc0987> banana ;"
+        " <loc0145><loc0470><loc0810><loc0995> banana ;"
+        " <loc0250><loc0500><loc0900><loc1010> banana"
+    )
+    tokens = _LOC_TOKEN_RE.findall(response)
+    assert len(tokens) == 12
+    assert len(tokens) // 4 == 3
+
+
+def test_detect_loc_token_regex_returns_zero_on_empty_response() -> None:
+    """Empty response = the model saw nothing of that noun."""
+
+    assert _LOC_TOKEN_RE.findall("") == []
+    assert _LOC_TOKEN_RE.findall("no bananas") == []
+
+
+def test_default_mode_is_detect() -> None:
+    """The default count mode should be detect (more accurate on
+    clustered scenes). Operators can opt out via env."""
+
+    counter = PaliGemmaCounter(model_id="dummy-model-id")
+    snap = counter.status()
+    assert snap["mode"] == "detect"
 
 
 def test_status_before_load_reports_unloaded() -> None:

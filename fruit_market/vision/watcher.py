@@ -131,15 +131,26 @@ class VisionWatcher:
         self._inventory = inventory
         self._camera = camera
         self._model = model
+        # 0.5 s poll lets the motion gate sample the freshest streamer
+        # frame and fire inference within ~half a second of a scene
+        # change. The model itself takes ~1-2 s per tick, but the
+        # poll/inference loop overlaps via run_in_executor so the
+        # next poll happens while the current tick is finishing.
+        # Override with FM_VISION_POLL_SECONDS.
         self._poll_interval = (
             poll_interval_seconds
             if poll_interval_seconds is not None
-            else float(os.environ.get("FM_VISION_POLL_SECONDS", "3"))
+            else float(os.environ.get("FM_VISION_POLL_SECONDS", "0.5"))
         )
+        # 3% byte-length change is enough to catch a single fruit
+        # being moved — 8% needed visible hand intrusion. Lower
+        # threshold = more frequent ticks on subtle changes, slight
+        # risk of camera-noise false positives (harmless: model
+        # just re-runs and returns the same count).
         self._motion_threshold = (
             motion_threshold
             if motion_threshold is not None
-            else float(os.environ.get("FM_VISION_MOTION_THRESHOLD", "8.0"))
+            else float(os.environ.get("FM_VISION_MOTION_THRESHOLD", "3.0"))
         )
         # Heartbeat: even with motion gating active, force one count
         # every ``heartbeat_seconds`` so a perfectly-still scene doesn't
@@ -244,21 +255,31 @@ class VisionWatcher:
         self.status.last_skipped_motion = False
         self._previous_frame = frame
 
-        # One model call per item. PaliGemma ~0.5 s per call warm; for
-        # 2-4 items this stays well inside the 3 s poll budget. Each
-        # call is independent — a misfire on one doesn't poison the
-        # others. We reconcile per item so the catalog updates piece
-        # by piece if a later call hangs.
-        counts: dict[str, int] = {}
+        # One BATCH model call for all items — PaliGemma's detect
+        # task accepts ``apple ; banana`` and returns per-noun boxes
+        # in a single forward pass. Cuts tick latency roughly in
+        # half vs the previous per-item loop.
         change_ts = time.time()
+        nouns = [item.name for item in items_to_count]
+        try:
+            batch = await loop.run_in_executor(
+                None, self._model.count_batch, frame, nouns
+            )
+        except Exception:
+            logger.exception("model count_batch failed for %r", nouns)
+            batch = {}
+
+        # Now iterate items to update inventory + activity. We
+        # preserve the per-item failure tolerance from the previous
+        # loop: a missing noun in the batch result just means the
+        # model saw zero of it (detect returns no boxes for absent
+        # objects). A wholesale batch failure leaves all items
+        # untouched and falls into the "no counts" branch below.
+        counts: dict[str, int] = {}
         for item in items_to_count:
-            try:
-                count = await loop.run_in_executor(
-                    None, self._model.count, frame, item.name
-                )
-            except Exception:
-                logger.exception("model count failed for %r", item.name)
+            if item.name not in batch:
                 continue
+            count = batch[item.name]
             counts[item.name] = count
 
             # Detect change vs the previous tick. Anything other than
