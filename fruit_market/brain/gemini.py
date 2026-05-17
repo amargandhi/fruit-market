@@ -60,7 +60,13 @@ def _generate_with_gemini(transcript: str, services: Services, api_key: str) -> 
         temperature=0.2,
     )
     response = client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        # Gemini 3.1 Flash Lite is the right size for a tool-using
+        # brain when the perception work is already done at the edge
+        # (PaliGemma counts inventory; the phone agent just routes
+        # intent → tool → response). Override via GEMINI_MODEL —
+        # e.g. ``gemini-2.5-flash`` if a particular call needs richer
+        # reasoning at the cost of ~3× latency.
+        model=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
         contents=transcript,
         config=config,
     )
