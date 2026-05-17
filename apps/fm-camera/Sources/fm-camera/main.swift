@@ -197,151 +197,93 @@ func runCLI(deviceQuery: String, outputPath: String) -> Never {
 }
 
 // ───────────────────────────────────────────────────────────────────
-// UI mode
+// UI mode — dead simple: launch, prompt for camera, capture from the
+// preferred device (default C920), save to /tmp, show alert, exit.
+// No persistent window; no SwiftUI dance. The whole point is to give
+// the .app bundle a chance to be granted camera permission once;
+// subsequent invocations should use CLI mode.
 // ───────────────────────────────────────────────────────────────────
 
-@MainActor
-final class UIState: ObservableObject {
-    @Published var devices: [AVCaptureDevice] = []
-    @Published var selectedDeviceName: String = ""
-    @Published var outputPath: String = "/tmp/fruit-market-smoke.jpg"
-    @Published var status: String = "Click Capture to snap a JPEG."
-    @Published var lastImage: NSImage? = nil
-
-    func refreshDevices() {
-        let ds = videoDevices()
-        self.devices = ds
-        if selectedDeviceName.isEmpty {
-            // Prefer the C920 if present, otherwise the first device.
-            if let c920 = ds.first(where: { $0.localizedName.contains("C920") }) {
-                selectedDeviceName = c920.localizedName
-            } else if let first = ds.first {
-                selectedDeviceName = first.localizedName
-            }
-        }
-    }
-
-    func capture() {
-        let device = selectedDeviceName
-        let path = outputPath
-        self.status = "Capturing from \(device)…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            // Use the device's full name as the query so we get an
-            // exact match on the picker selection.
-            do {
-                let data = try captureOneJPEG(deviceQuery: device)
-                try data.write(to: URL(fileURLWithPath: path))
-                let img = NSImage(data: data)
-                DispatchQueue.main.async {
-                    self.lastImage = img
-                    self.status = "\(data.count) bytes -> \(path)"
-                }
-            } catch {
-                let message: String
-                switch error {
-                case CaptureError.noDevice(let q, let avail):
-                    message = "device not found: \(q). available: \(avail.joined(separator: ", "))"
-                case CaptureError.timedOut:
-                    message = "capture timed out after 10s"
-                case CaptureError.noData:
-                    message = "capture returned no data"
-                default:
-                    message = "capture failed: \(error)"
-                }
-                DispatchQueue.main.async { self.status = message }
-            }
-        }
-    }
-}
-
-struct ContentView: View {
-    @ObservedObject var state: UIState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Fruit Market — camera bridge")
-                .font(.title2)
-
-            HStack {
-                Text("Camera:")
-                Picker("", selection: $state.selectedDeviceName) {
-                    ForEach(state.devices, id: \.uniqueID) { dev in
-                        Text(dev.localizedName).tag(dev.localizedName)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 320)
-                Button("Refresh") { state.refreshDevices() }
-            }
-
-            HStack {
-                Text("Output:")
-                TextField("/tmp/fruit-market-smoke.jpg", text: $state.outputPath)
-            }
-
-            Button {
-                state.capture()
-            } label: {
-                Label("Capture", systemImage: "camera.shutter.button")
-                    .frame(maxWidth: .infinity)
-            }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
-
-            Divider()
-
-            Text(state.status)
-                .foregroundStyle(.secondary)
-                .font(.callout)
-
-            if let img = state.lastImage {
-                Image(nsImage: img)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(height: 320)
-                    .overlay(Text("No capture yet").foregroundStyle(.secondary))
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 540, minHeight: 600)
-    }
-}
+let DEFAULT_DEVICE_QUERY = "C920"
+let DEFAULT_OUTPUT_PATH = "/tmp/fruit-market-smoke.jpg"
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    // UIState is @MainActor-isolated; defer construction until
-    // applicationDidFinishLaunching, which AppKit guarantees runs on
-    // the main thread. That lets the top-level entry point stay
-    // outside main-actor isolation.
-    var state: UIState!
-    var window: NSWindow!
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let state = UIState()
-        self.state = state
         NSApp.setActivationPolicy(.regular)
-        state.refreshDevices()
-        let host = NSHostingController(rootView: ContentView(state: state))
-        window = NSWindow(contentViewController: host)
-        window.title = "Fruit Market Camera"
-        window.setContentSize(NSSize(width: 600, height: 720))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        // Prompt for camera access immediately so the dialog appears
-        // before the user clicks Capture (less surprising).
+
+        // Do the work off the main thread so the run loop stays
+        // responsive enough for the TCC permission dialog.
         DispatchQueue.global(qos: .userInitiated).async {
-            _ = ensureCameraAuthorized()
+            guard ensureCameraAuthorized() else {
+                DispatchQueue.main.async {
+                    self.showAlert(
+                        title: "Camera access denied",
+                        message: "Grant camera permission to "
+                            + "FruitMarketCamera in System Settings "
+                            + "> Privacy & Security > Camera, then "
+                            + "relaunch this app.",
+                        style: .critical
+                    )
+                    NSApp.terminate(nil)
+                }
+                return
+            }
+
+            let deviceQuery = ProcessInfo.processInfo.environment["FM_CAMERA_DEVICE"]
+                ?? DEFAULT_DEVICE_QUERY
+            let outputPath = ProcessInfo.processInfo.environment["FM_CAMERA_OUTPUT"]
+                ?? DEFAULT_OUTPUT_PATH
+
+            do {
+                let data = try captureOneJPEG(deviceQuery: deviceQuery)
+                try data.write(to: URL(fileURLWithPath: outputPath))
+                DispatchQueue.main.async {
+                    self.showAlert(
+                        title: "Captured \(data.count) bytes",
+                        message: "Saved to \(outputPath)\n\n"
+                            + "Device: \(deviceQuery)\n\n"
+                            + "You can close this app now. "
+                            + "Future captures from Python will use "
+                            + "fm-camera in CLI mode.",
+                        style: .informational
+                    )
+                    NSApp.terminate(nil)
+                }
+            } catch {
+                let detail: String
+                switch error {
+                case CaptureError.noDevice(let q, let avail):
+                    detail = "Device not found: \(q)\n\nAvailable cameras:\n"
+                        + avail.map { "• \($0)" }.joined(separator: "\n")
+                        + "\n\nSet FM_CAMERA_DEVICE to a substring of one "
+                        + "of the names above."
+                case CaptureError.timedOut:
+                    detail = "Capture timed out after 10s."
+                case CaptureError.noData:
+                    detail = "Capture returned no data."
+                default:
+                    detail = "\(error)"
+                }
+                DispatchQueue.main.async {
+                    self.showAlert(
+                        title: "Capture failed",
+                        message: detail,
+                        style: .critical
+                    )
+                    NSApp.terminate(nil)
+                }
+            }
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+    func showAlert(title: String, message: String, style: NSAlert.Style) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 

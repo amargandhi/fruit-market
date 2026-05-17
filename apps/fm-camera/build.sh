@@ -35,8 +35,13 @@ chmod +x "$APP_BUNDLE/Contents/MacOS/fm-camera"
 # Ad-hoc sign so macOS treats this as a stable identity for TCC.
 # Unsigned binaries get a different (and unstable) responsible-app
 # identity that can drop permission grants between runs.
+# Ad-hoc sign WITHOUT hardened runtime. Hardened runtime requires
+# entitlements (e.g. com.apple.security.device.camera) which we
+# can't declare with ad-hoc signing — Apple's tooling rejects them.
+# Without hardened runtime, ad-hoc sign is enough to give the .app
+# a stable TCC identity.
 echo "→ ad-hoc codesigning..."
-codesign --force --sign - --options runtime "$APP_BUNDLE"
+codesign --force --sign - "$APP_BUNDLE"
 
 echo
 echo "Built: $(pwd)/$APP_BUNDLE"
