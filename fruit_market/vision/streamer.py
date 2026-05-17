@@ -45,6 +45,7 @@ from fruit_market.vision.camera import (
     BrokerCamera,
     CameraUnavailableError,
     Cv2Camera,
+    DaemonCamera,
     FileCamera,
 )
 
@@ -61,6 +62,10 @@ _BACKEND_DEFAULTS: dict[type, tuple[float, float]] = {
     Cv2Camera: (5.0, 8.0),
     BrokerCamera: (0.5, 1.0),
     FileCamera: (2.0, 4.0),
+    # DaemonCamera is local HTTP to a long-running .app that
+    # captures at ~15 FPS itself — we can pull cheaply at higher
+    # rates without putting load on the camera.
+    DaemonCamera: (5.0, 10.0),
 }
 
 

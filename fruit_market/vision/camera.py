@@ -274,6 +274,96 @@ class FileCamera:
         return
 
 
+# ─── DaemonCamera ──────────────────────────────────────────────────
+
+
+class DaemonCamera:
+    """Read frames over HTTP from the long-running FruitMarketCamera.app daemon.
+
+    The .app holds an AVCaptureSession open continuously and serves
+    the most recent JPEG via a tiny local HTTP server (default
+    ``http://127.0.0.1:8765/frame.jpg``). This is the cleanest
+    backend for "truly live" video on macOS — the daemon has its
+    own TCC entry (granted once via the .app bundle), so the
+    Python process can run from ANY parent (including sandboxed
+    ones like Claude Code) without camera-permission battles.
+
+    Settings (env):
+      * ``FM_CAMERA_DAEMON_URL`` — base URL of the daemon (default
+        ``http://127.0.0.1:8765``).
+      * ``FM_CAMERA_DAEMON_TIMEOUT`` — per-request timeout in
+        seconds (default 2.0).
+
+    Start the daemon first:
+
+        open apps/fm-camera/FruitMarketCamera.app --args --daemon
+
+    or directly:
+
+        apps/fm-camera/FruitMarketCamera.app/Contents/MacOS/fm-camera \\
+            --daemon --device "C920" --port 8765
+    """
+
+    def __init__(
+        self,
+        base_url: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        explicit = base_url or os.environ.get(
+            "FM_CAMERA_DAEMON_URL", "http://127.0.0.1:8765"
+        )
+        self._frame_url = explicit.rstrip("/") + "/frame.jpg"
+        self._timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else float(os.environ.get("FM_CAMERA_DAEMON_TIMEOUT", "2.0"))
+        )
+        self._lock = threading.Lock()
+        # Reuse the httpx Client across snapshots so we get
+        # connection pooling for free — daemon endpoint is on
+        # localhost but the TCP handshake still adds up at 5 FPS.
+        try:
+            import httpx  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover
+            raise CameraUnavailableError(
+                "DaemonCamera requires httpx (it's already a runtime "
+                "dep of the FastAPI app)."
+            ) from exc
+        self._client = httpx.Client(timeout=self._timeout)
+
+    def snapshot(self) -> bytes:
+        with self._lock:
+            try:
+                response = self._client.get(self._frame_url)
+            except Exception as exc:  # noqa: BLE001
+                raise CameraUnavailableError(
+                    f"DaemonCamera: cannot reach {self._frame_url}: {exc}. "
+                    "Is FruitMarketCamera.app running in --daemon mode?"
+                ) from exc
+            if response.status_code != 200:
+                # 503 with X-Camera-Status header means the daemon
+                # is up but hasn't captured a first frame yet —
+                # surface a clear message so the watcher's log
+                # explains what's happening.
+                status = response.headers.get("X-Camera-Status", "unknown")
+                raise CameraUnavailableError(
+                    f"DaemonCamera: HTTP {response.status_code} "
+                    f"(X-Camera-Status: {status})"
+                )
+            data = response.content
+            if not data:
+                raise CameraUnavailableError(
+                    "DaemonCamera: empty response body"
+                )
+            return data
+
+    def close(self) -> None:
+        import contextlib  # noqa: PLC0415
+
+        with contextlib.suppress(Exception):
+            self._client.close()
+
+
 # ─── Factory ───────────────────────────────────────────────────────
 
 
@@ -282,14 +372,14 @@ def open_camera() -> CameraBackend:
 
     Values:
       * ``cv2``    — use :class:`Cv2Camera` only; raise if it fails.
-      * ``broker`` — use :class:`BrokerCamera` only.
+      * ``broker`` — one-shot subprocess to :class:`BrokerCamera`.
       * ``file``   — use :class:`FileCamera` (pinned JPEG, TCC-free).
-      * ``auto``   — try cv2, fall back to broker if cv2 raises.
+      * ``daemon`` — use :class:`DaemonCamera` (continuous FruitMarketCamera.app).
+      * ``auto``   — try cv2, fall back to broker on failure.
 
     Default is ``cv2`` to preserve the original behavior; flip to
-    ``broker`` when running under a sandboxed parent (e.g. Claude's
-    embedded terminal), or ``file`` for reproducible bench runs.
-    ``auto`` is convenient for local dev.
+    ``daemon`` once you've started ``FruitMarketCamera.app --daemon``
+    for the smoothest live-feed experience.
     """
 
     backend = os.environ.get("FM_CAMERA_BACKEND", "cv2").lower()
@@ -297,6 +387,8 @@ def open_camera() -> CameraBackend:
         return BrokerCamera()
     if backend == "file":
         return FileCamera()
+    if backend == "daemon":
+        return DaemonCamera()
     if backend == "auto":
         cam: CameraBackend = Cv2Camera()
         try:

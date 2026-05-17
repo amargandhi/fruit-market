@@ -298,8 +298,35 @@ func runUI() -> Never {
 // ───────────────────────────────────────────────────────────────────
 // Entry point
 // ───────────────────────────────────────────────────────────────────
+//
+// Three modes:
+//
+//   fm-camera --daemon [--device "C920"] [--port 8765]
+//       continuous AVCaptureSession + HTTP server on localhost
+//   fm-camera <device-substring> <output-path>
+//       single JPEG capture and exit
+//   fm-camera          (no args)
+//       interactive permission-grant + single capture (legacy)
 
 let argv = CommandLine.arguments
+
+if argv.contains("--daemon") {
+    var deviceName = "C920"
+    var port: UInt16 = 8765
+    var i = 1
+    while i < argv.count {
+        let arg = argv[i]
+        if arg == "--device", i + 1 < argv.count {
+            deviceName = argv[i + 1]; i += 2; continue
+        }
+        if arg == "--port", i + 1 < argv.count, let p = UInt16(argv[i + 1]) {
+            port = p; i += 2; continue
+        }
+        i += 1
+    }
+    runDaemon(deviceName: deviceName, port: port)
+}
+
 if argv.count >= 3 {
     runCLI(deviceQuery: argv[1], outputPath: argv[2])
 }
