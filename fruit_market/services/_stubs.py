@@ -271,9 +271,7 @@ class StubTeachService:
         text = transcript.strip()
         name_match = _NAME_RE.search(text)
         name = (name_match.group(1).strip().lower() if name_match else "item")
-        # Singularize a naive plural for storage; display layer can
-        # pluralize on render.
-        name = name.rstrip().removesuffix("s") if name.endswith("s") and len(name) > 3 else name
+        name = _singularize_name(name)
 
         price_match = _PRICE_RE.search(text)
         price_cents = 0
@@ -360,6 +358,26 @@ def make_stub_services() -> Services:
         venue=venue,
     )
     return services
+
+
+def _singularize_name(raw: str) -> str:
+    words = raw.split()
+    if not words:
+        return raw
+    last = words[-1]
+    if last.endswith("ies") and len(last) > 4:
+        last = f"{last[:-3]}y"
+    elif (
+        last.endswith(("ches", "shes"))
+        and len(last) > 5
+        or last.endswith(("xes", "zes", "ses", "oes"))
+        and len(last) > 4
+    ):
+        last = last[:-2]
+    elif last.endswith("s") and not last.endswith("ss") and len(last) > 3:
+        last = last[:-1]
+    words[-1] = last
+    return " ".join(words)
 
 
 # These helpers exist purely to give mypy a clear assertion point

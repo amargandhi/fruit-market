@@ -96,15 +96,30 @@ def parse_transcript(transcript: str) -> tuple[str, int, int]:
             # Trim trailing filler words that the lookahead would
             # have caught individually.
             raw = re.sub(r"\s+(?:and|or|that|which)$", "", raw)
-            # Drop trailing plural 's' for storage; the display
-            # layer can pluralize on render. Don't strip if the word
-            # is already short ("us", "is").
-            if raw.endswith("s") and len(raw) > 3:
-                raw = raw[:-1]
-            name = raw or "item"
+            name = _singularize_name(raw) or "item"
             break
 
     return name, price_cents, initial_count
+
+
+def _singularize_name(raw: str) -> str:
+    words = raw.split()
+    if not words:
+        return raw
+    last = words[-1]
+    if last.endswith("ies") and len(last) > 4:
+        last = f"{last[:-3]}y"
+    elif (
+        last.endswith(("ches", "shes"))
+        and len(last) > 5
+        or last.endswith(("xes", "zes", "ses", "oes"))
+        and len(last) > 4
+    ):
+        last = last[:-2]
+    elif last.endswith("s") and not last.endswith("ss") and len(last) > 3:
+        last = last[:-1]
+    words[-1] = last
+    return " ".join(words)
 
 
 # ─── Service ────────────────────────────────────────────────────────

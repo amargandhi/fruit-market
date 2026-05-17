@@ -123,6 +123,15 @@ def test_stub_services_can_run_a_teach_quote_reserve_loop() -> None:
     assert services.orders.get(order.id).status == "paid"  # type: ignore[union-attr]
 
 
+def test_stub_teach_parser_handles_es_plural() -> None:
+    services = make_services()
+    proposal = services.teach.propose("These are mangoes, $2.75, 7 of them")
+
+    assert proposal.name == "mango"
+    assert proposal.price_cents == 275
+    assert proposal.initial_count == 7
+
+
 # ─── tool specs: every input/output is a Pydantic model ────────────
 
 

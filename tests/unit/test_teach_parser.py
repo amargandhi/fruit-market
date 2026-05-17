@@ -12,6 +12,7 @@ from fruit_market.services.teach import parse_transcript
     [
         ("These are bananas, $1.00, 6 of them", "banana", 100, 6),
         ("These are apples, $1.50, 4 of them", "apple", 150, 4),
+        ("got some mangoes for $2.75, 7 left", "mango", 275, 7),
         ("this is a mango for $2", "mango", 200, 0),
         ("got 5 oranges for $0.75 each", "orange", 75, 5),
         ("we have 8 lemons left", "lemon", 0, 8),
