@@ -94,6 +94,10 @@ class VisionWatcher:
             else float(os.environ.get("FM_VISION_HEARTBEAT_SECONDS", "30"))
         )
         self._previous_frame: bytes | None = None
+        # Freshest snapshot for the kiosk's video feed. Distinct
+        # from ``_previous_frame`` (motion-gate baseline) — that
+        # one only updates when a model call actually fires.
+        self._latest_frame: bytes | None = None
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self.status = WatcherStatus()
@@ -147,6 +151,11 @@ class VisionWatcher:
         # executor so the asyncio loop stays responsive.
         loop = asyncio.get_running_loop()
         frame = await loop.run_in_executor(None, self._camera.snapshot)
+        # Cache the freshest frame so the kiosk's ``/api/camera/frame.jpg``
+        # endpoint has something to serve. We update this even when
+        # the motion gate suppresses the count call below — the UI
+        # should always see the most recent capture.
+        self._latest_frame = frame
 
         # Motion gate, with a heartbeat override: if the last
         # successful count is older than ``heartbeat_seconds``, run
@@ -178,6 +187,16 @@ class VisionWatcher:
             source="model",
             confidence=0.9,
         )
+
+    # ─── public reads ─────────────────────────────────────────────
+
+    @property
+    def latest_frame(self) -> bytes | None:
+        """Freshest camera snapshot bytes, or ``None`` until the
+        watcher has ticked at least once. Served by
+        ``/api/camera/frame.jpg`` for the kiosk's live feed."""
+
+        return self._latest_frame
 
     # ─── motion gate ──────────────────────────────────────────────
 

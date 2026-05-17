@@ -20,6 +20,28 @@
       </header>
 
       <section class="board" aria-label="Kiosk">
+        <section id="camera-panel" class="panel camera-panel" aria-labelledby="camera-title">
+          <div class="panel-heading">
+            <h2 id="camera-title">Camera</h2>
+            <span id="camera-status" class="camera-status">starting…</span>
+          </div>
+          <div class="camera-frame">
+            <img
+              id="camera-feed"
+              alt="Live camera frame from the stall"
+              draggable="false"
+            />
+            <div id="camera-overlay" class="camera-overlay">
+              <span id="camera-noun"></span>
+              <span id="camera-count"></span>
+            </div>
+          </div>
+          <p class="camera-caption">
+            Edge AI (<code>PaliGemma 2</code>) counts the active item every
+            <span id="camera-poll">3</span>s.
+          </p>
+        </section>
+
         <section id="catalog-panel" class="panel catalog-panel" aria-labelledby="catalog-title">
           <div class="panel-heading">
             <h2 id="catalog-title">Catalog</h2>

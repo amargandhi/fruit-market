@@ -7,7 +7,7 @@ import json
 from typing import TYPE_CHECKING, cast
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from fruit_market.api.schemas import (
     CatalogItemView,
@@ -115,6 +115,48 @@ def switch_active_item(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="unknown item") from exc
     return SwitchActiveItemResponse(item_id=payload.item_id)
+
+
+# ─── Camera feed ────────────────────────────────────────────────────
+
+
+@router.get("/camera/frame.jpg")
+def camera_frame(request: Request) -> Response:
+    """Most recent camera snapshot as a JPEG.
+
+    The kiosk polls this every second for a live feed. Returns
+    503 with ``X-Camera-Status: starting`` if the watcher hasn't
+    captured anything yet (e.g. lifespan still warming up, or no
+    active item so the watcher is idle). Browsers can re-poll on
+    a 503 without crashing the <img> tag.
+    """
+
+    vision = get_vision(request.app)
+    if vision is None:
+        return Response(
+            status_code=503,
+            content=b"vision pipeline disabled",
+            media_type="text/plain",
+            headers={"X-Camera-Status": "disabled"},
+        )
+    frame = vision.watcher.latest_frame
+    if frame is None:
+        return Response(
+            status_code=503,
+            content=b"no frame captured yet",
+            media_type="text/plain",
+            headers={"X-Camera-Status": "starting"},
+        )
+    return Response(
+        content=frame,
+        media_type="image/jpeg",
+        headers={
+            # Never cache — the kiosk polls this URL with a busted
+            # query-string but downstream proxies might still try.
+            "Cache-Control": "no-store, max-age=0",
+            "X-Camera-Status": "ok",
+        },
+    )
 
 
 # ─── Pico keypad ────────────────────────────────────────────────────

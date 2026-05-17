@@ -20,6 +20,10 @@ const els = {
   teachForm: document.querySelector("#teach-form"),
   teachInput: document.querySelector("#teach-input"),
   teachProposal: document.querySelector("#teach-proposal"),
+  cameraFeed: document.querySelector("#camera-feed"),
+  cameraStatus: document.querySelector("#camera-status"),
+  cameraNoun: document.querySelector("#camera-noun"),
+  cameraCount: document.querySelector("#camera-count"),
 };
 
 let eventSource = null;
@@ -313,3 +317,52 @@ els.teachForm.addEventListener("submit", (event) => void proposeTeach(event));
 
 void loadState();
 connectStream();
+
+// ─── Live camera feed ───────────────────────────────────────────────
+// Polls /api/camera/frame.jpg every second. We don't use MJPEG because
+// the watcher cadence is ~3 s anyway — at higher rates the browser
+// would just be re-rendering the same bytes. The overlay shows the
+// active noun and PaliGemma's most recent count so the operator can
+// tell at a glance what the model "sees".
+
+const CAMERA_POLL_MS = 1000;
+
+function refreshCameraFeed() {
+  if (!els.cameraFeed) return;
+  // Bust caches with a timestamp; the endpoint sets no-store but
+  // some browsers still cache aggressively on identical URLs.
+  els.cameraFeed.src = `/api/camera/frame.jpg?t=${Date.now()}`;
+}
+
+function refreshCameraOverlay() {
+  if (!els.cameraNoun || !els.cameraCount) return;
+  const activeId = state.active_item_id;
+  if (!activeId) {
+    els.cameraNoun.textContent = "no active item";
+    els.cameraCount.textContent = "—";
+    return;
+  }
+  const active = state.catalog.find((item) => item.item_id === activeId);
+  if (!active) {
+    els.cameraNoun.textContent = "?";
+    els.cameraCount.textContent = "—";
+    return;
+  }
+  els.cameraNoun.textContent = `${active.name}`;
+  els.cameraCount.textContent = `${active.physical_count}`;
+}
+
+if (els.cameraFeed) {
+  els.cameraFeed.addEventListener("error", () => {
+    if (els.cameraStatus) els.cameraStatus.textContent = "starting…";
+  });
+  els.cameraFeed.addEventListener("load", () => {
+    if (els.cameraStatus) els.cameraStatus.textContent = "live";
+  });
+  refreshCameraFeed();
+  refreshCameraOverlay();
+  setInterval(refreshCameraFeed, CAMERA_POLL_MS);
+  // Overlay just reads `state`, so it can update more often than the
+  // image and stays in sync with SSE catalog pushes.
+  setInterval(refreshCameraOverlay, 500);
+}
