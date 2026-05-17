@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,11 @@ class WatcherStatus:
     consecutive_failures: int = 0
     # Set by the watcher each time it runs the motion gate.
     last_motion_score: float = field(default=0.0)
+    # Wall-clock time of the most recent successful count. Used by the
+    # heartbeat: if the motion gate has been suppressing counts for
+    # longer than ``heartbeat_seconds``, force one through anyway so
+    # the dashboard doesn't show a stale value indefinitely.
+    last_count_at_monotonic: float = field(default=0.0)
 
 
 class VisionWatcher:
@@ -62,6 +68,7 @@ class VisionWatcher:
         model: PaliGemmaCounter,
         poll_interval_seconds: float | None = None,
         motion_threshold: float | None = None,
+        heartbeat_seconds: float | None = None,
     ) -> None:
         self._get_active_item: Callable[[], Item | None] = catalog_active_item
         self._inventory = inventory
@@ -76,6 +83,15 @@ class VisionWatcher:
             motion_threshold
             if motion_threshold is not None
             else float(os.environ.get("FM_VISION_MOTION_THRESHOLD", "8.0"))
+        )
+        # Heartbeat: even with motion gating active, force one count
+        # every ``heartbeat_seconds`` so a perfectly-still scene doesn't
+        # show a stale physical_count forever (and so we notice if the
+        # camera silently froze).
+        self._heartbeat_seconds = (
+            heartbeat_seconds
+            if heartbeat_seconds is not None
+            else float(os.environ.get("FM_VISION_HEARTBEAT_SECONDS", "30"))
         )
         self._previous_frame: bytes | None = None
         self._stop = asyncio.Event()
@@ -132,7 +148,16 @@ class VisionWatcher:
         loop = asyncio.get_running_loop()
         frame = await loop.run_in_executor(None, self._camera.snapshot)
 
-        if self._is_unchanged(frame):
+        # Motion gate, with a heartbeat override: if the last
+        # successful count is older than ``heartbeat_seconds``, run
+        # the model anyway so a static scene can't hide a frozen
+        # camera or a stale count.
+        now = time.monotonic()
+        stale = (
+            self.status.last_count_at_monotonic == 0.0
+            or now - self.status.last_count_at_monotonic >= self._heartbeat_seconds
+        )
+        if self._is_unchanged(frame) and not stale:
             self.status.last_skipped_motion = True
             self.status.last_tick_ok = True
             return
@@ -141,6 +166,7 @@ class VisionWatcher:
 
         count = await loop.run_in_executor(None, self._model.count, frame, active.name)
         self.status.last_count = count
+        self.status.last_count_at_monotonic = time.monotonic()
         self.status.consecutive_failures = 0
         self.status.last_tick_ok = True
 

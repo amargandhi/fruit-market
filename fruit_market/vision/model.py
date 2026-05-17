@@ -6,6 +6,16 @@ that returns an integer count of the target object in the image
 directly: one short generate per poll cycle, ``max_new_tokens=8``,
 extract the first integer from the response.
 
+Two reliability knobs are tuned into this wrapper:
+
+* **Greedy decoding** (``temperature=0.0``). Small VLMs are noisier
+  without it; for a fixed image and prompt we want the same integer
+  every time so a wrong answer is at least *stable* and debuggable.
+* **No active-product hints**. We never tell the model "the stall
+  sells bananas" — that biases identification, so PaliGemma will
+  cheerfully count bananas in an empty frame. The prompt is exactly
+  ``count {noun}\\n`` and nothing else.
+
 This module is lazy-imported so the rest of the codebase stays
 testable on Linux CI where ``mlx-vlm`` isn't installed.
 """
@@ -23,6 +33,11 @@ import threading
 DEFAULT_MODEL = "mlx-community/paligemma2-3b-mix-224-bf16"
 COUNT_PROMPT = "count {noun}\n"
 COUNT_MAX_TOKENS = 8
+# Greedy decoding (temperature=0) makes the model's output stable
+# for a fixed image. A wrong answer should be reproducibly wrong so
+# we can debug it; we don't want randomness masking systematic
+# misreads.
+COUNT_TEMPERATURE = 0.0
 
 
 _INT_RE = re.compile(r"(\d+)")
@@ -98,6 +113,7 @@ class PaliGemmaCounter:
                 prompt,
                 image=[image],
                 max_tokens=COUNT_MAX_TOKENS,
+                temperature=COUNT_TEMPERATURE,
                 verbose=False,
             )
             text = _coerce_text(response)

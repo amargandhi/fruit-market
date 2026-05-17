@@ -129,6 +129,42 @@ async def test_watcher_idle_when_no_active_item(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_watcher_heartbeat_forces_count_when_scene_is_static(tmp_path) -> None:
+    """A perfectly-still scene must still get refreshed counts after
+    the heartbeat interval — the motion gate alone would freeze the
+    physical_count forever."""
+
+    store = EventStore(tmp_path / "events.db")
+    services = make_real_services(store=store)
+    item = services.teach.confirm(
+        services.teach.propose("These are bananas, $1.00, 6 of them").id
+    )
+
+    camera = _FakeCamera()
+    model = _FakeModel(default=2)
+    watcher = VisionWatcher(
+        catalog_active_item=services.catalog.get_active_item,
+        inventory=services.inventory,
+        camera=camera,
+        model=model,
+        poll_interval_seconds=0.02,
+        motion_threshold=99.0,  # everything is "no motion"
+        heartbeat_seconds=0.05,  # short heartbeat for the test
+    )
+    await watcher.start()
+    # Wait long enough for: initial tick + at least one heartbeat override.
+    await asyncio.sleep(0.2)
+    await watcher.stop()
+
+    # First tick always runs (previous_frame is None → not motion-gated),
+    # then the heartbeat should force at least one additional count
+    # despite the motion gate. Without the heartbeat, model.calls would
+    # stay at 1 forever.
+    assert len(model.calls) >= 2, f"heartbeat did not fire: only {len(model.calls)} calls"
+    assert services.inventory.get_physical_count(item.id) == 2
+
+
+@pytest.mark.asyncio
 async def test_watcher_survives_model_exception(tmp_path) -> None:
     store = EventStore(tmp_path / "events.db")
     services = make_real_services(store=store)
