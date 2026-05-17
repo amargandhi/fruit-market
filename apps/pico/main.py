@@ -33,7 +33,12 @@ approval, blue-green while payment/order work is in progress, green
 when confirmed, and red on reject/failure.
 """
 
-from __future__ import annotations
+# NOTE: this file runs on MicroPython on the Pico, NOT on CPython.
+# That means: no ``from __future__ import annotations``, no PEP 604
+# union syntax (``str | None`` is fine on MicroPython >= 1.21 but
+# we keep things conservative), no f-strings inside dict literals
+# the parser can't always handle, and the only stdlib modules
+# we get are the small set MicroPython ships natively.
 
 import json
 import select
@@ -41,7 +46,14 @@ import sys
 import time
 
 try:
-    import picokeypad as keypad  # Pimoroni MicroPython library
+    # The Pimoroni MicroPython build for RP2350 (Pico 2 W) ships
+    # picokeypad as a class-based module; older RP2040 builds had
+    # module-level functions. We use the class API here — it works
+    # on both. If neither is available (running on a stock MicroPython
+    # or a desktop interpreter for syntax checking), fall back to
+    # None and the firmware becomes a no-op shell.
+    from picokeypad import PicoKeypad  # type: ignore[import-not-found]
+    keypad = PicoKeypad()
 except ImportError:
     keypad = None
 
@@ -372,7 +384,11 @@ def apply_host_payload(payload):
 
 def setup():
     if keypad is not None:
-        keypad.init()
+        # PicoKeypad() construction in the new class-based Pimoroni
+        # API already initialises the hardware — no separate init()
+        # call is needed (and the older module-level init() function
+        # doesn't exist on this build). Just turn the brightness up
+        # so the LEDs are readable on a lit table.
         keypad.set_brightness(0.9)
 
 
