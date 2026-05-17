@@ -16,9 +16,15 @@
         </div>
         <div class="status-cluster">
           <span id="connection-status" class="status-pill" data-state="off">Connecting</span>
+          <span id="demo-state-pill" class="status-pill demo-state" data-state="off">
+            <span class="dot"></span> Demo idle
+          </span>
           <span id="edge-ai-pill" class="status-pill edge">
             <span class="dot"></span> Edge AI
           </span>
+          <button id="start-demo-button" class="primary-button" type="button" hidden>
+            ▶ Start Demo
+          </button>
           <button id="refresh-button" class="ghost-button" type="button" aria-label="Refresh state">
             Refresh
           </button>
@@ -40,6 +46,15 @@
             />
             <div id="camera-overlay-empty" class="camera-overlay-empty" hidden>
               No items taught yet
+            </div>
+            <div id="demo-not-started" class="demo-not-started" hidden>
+              <div class="not-started-card">
+                <p class="not-started-title">Camera streaming · Edge AI on standby</p>
+                <p class="not-started-hint">
+                  Press <strong>READY</strong> on the Pico to begin counting,
+                  or use the button at the top of the screen.
+                </p>
+              </div>
             </div>
             <div id="camera-counts" class="camera-counts" aria-live="polite"></div>
           </div>

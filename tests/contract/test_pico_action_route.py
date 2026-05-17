@@ -38,13 +38,27 @@ def _seed_reserved_order(client: TestClient) -> str:
     return order.id
 
 
-def test_ready_action_always_returns_ok() -> None:
+def test_ready_action_starts_demo() -> None:
     with TestClient(app) as client:
+        # First press flips demo_active to True with status="started".
         response = client.post("/api/pico/action", json={"action": "ready"})
         assert response.status_code == 200
         body = response.json()
         assert body["action"] == "ready"
-        assert body["status"] == "ok"
+        assert body["status"] == "started"
+        # Demo is now active.
+        assert client.get("/api/demo/active").json()["demo_active"] is True
+        # Second press is idempotent.
+        again = client.post("/api/pico/action", json={"action": "ready"}).json()
+        assert again["status"] == "already_started"
+
+
+def test_demo_start_stop_endpoints() -> None:
+    with TestClient(app) as client:
+        assert client.get("/api/demo/active").json() == {"demo_active": False}
+        assert client.post("/api/demo/start").json() == {"demo_active": True}
+        assert client.get("/api/demo/active").json() == {"demo_active": True}
+        assert client.post("/api/demo/stop").json() == {"demo_active": False}
 
 
 def test_packed_action_packs_paid_order() -> None:

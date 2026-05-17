@@ -4,6 +4,7 @@ const state = {
   orders: [],
   pending: {},
   restock: null,
+  demo_active: false,
 };
 
 const els = {
@@ -24,6 +25,9 @@ const els = {
   cameraStatus: document.querySelector("#camera-status"),
   cameraCounts: document.querySelector("#camera-counts"),
   cameraOverlayEmpty: document.querySelector("#camera-overlay-empty"),
+  demoNotStarted: document.querySelector("#demo-not-started"),
+  demoStatePill: document.querySelector("#demo-state-pill"),
+  startDemoButton: document.querySelector("#start-demo-button"),
   logList: document.querySelector("#log-list"),
   logMeta: document.querySelector("#log-meta"),
   cameraPoll: document.querySelector("#camera-poll"),
@@ -56,9 +60,55 @@ async function loadState() {
   state.orders = next.orders || [];
   state.pending = next.pending || {};
   state.restock = next.restock || null;
+  state.demo_active = !!next.demo_active;
   render();
+  renderDemoGate();
   setStatus("Live", "online");
 }
+
+function renderDemoGate() {
+  if (els.demoNotStarted) {
+    els.demoNotStarted.hidden = state.demo_active;
+  }
+  if (els.demoStatePill) {
+    els.demoStatePill.dataset.state = state.demo_active ? "on" : "off";
+    els.demoStatePill.innerHTML = state.demo_active
+      ? `<span class="dot"></span> Demo running`
+      : `<span class="dot"></span> Demo idle`;
+  }
+  if (els.startDemoButton) {
+    els.startDemoButton.hidden = state.demo_active;
+  }
+}
+
+async function startDemoFromKiosk() {
+  try {
+    const res = await api("/api/demo/start", { method: "POST" });
+    state.demo_active = !!res.demo_active;
+    renderDemoGate();
+  } catch (err) {
+    console.error("failed to start demo:", err);
+  }
+}
+
+if (els.startDemoButton) {
+  els.startDemoButton.addEventListener("click", () => void startDemoFromKiosk());
+}
+
+// Poll demo state every 1.5s so the kiosk picks up Pico-driven starts
+// (the Pico bridge POSTs /api/pico/action, which sets demo_active
+// on the server; the SSE stream doesn't push that yet).
+setInterval(async () => {
+  try {
+    const res = await api("/api/demo/active");
+    if (!!res.demo_active !== state.demo_active) {
+      state.demo_active = !!res.demo_active;
+      renderDemoGate();
+    }
+  } catch {
+    // silent — connection-status pill already shows offline
+  }
+}, 1500);
 
 function connectStream() {
   if (eventSource) {
@@ -147,6 +197,11 @@ function renderRestock() {
   els.restockPanel.hidden = false;
   const pending = restock.status === "pending_approval";
   const failed = restock.status === "failed" || restock.status === "rejected";
+  const eta = restock.eta_minutes ? `${restock.eta_minutes}m ETA` : "ETA pending";
+  const emailLabel = restockEmailLabel(restock);
+  const basketLink = restock.basket_url
+    ? `<a class="restock-link" href="${escapeHtml(restock.basket_url)}" target="_blank" rel="noreferrer">Open supplier basket</a>`
+    : "";
   els.restockPanel.className = `restock-panel ${restock.status}`;
   els.restockPanel.innerHTML = `
     <div class="row-main">
@@ -155,8 +210,14 @@ function renderRestock() {
     </div>
     <div class="row-meta">
       <span>${restock.qty} from ${escapeHtml(restock.supplier_name)}</span>
-      <span>${statusLabel(restock.status)}</span>
+      <span>${statusLabel(restock.status)} · ${escapeHtml(eta)}</span>
     </div>
+    <div class="restock-demo-flow">
+      <span>Basket staged</span>
+      <span>${escapeHtml(emailLabel)}</span>
+      <span>${pending ? "Waiting for Pico" : statusLabel(restock.status)}</span>
+    </div>
+    ${basketLink}
     ${
       failed && restock.failure_reason
         ? `<div class="restock-error">${escapeHtml(restock.failure_reason)}</div>`
@@ -171,6 +232,16 @@ function renderRestock() {
         : ""
     }
   `;
+}
+
+function restockEmailLabel(restock) {
+  if (restock.email_status === "sent") {
+    return restock.operator_email ? `Email sent to ${restock.operator_email}` : "Email sent";
+  }
+  if (restock.email_status === "failed") {
+    return "Email failed";
+  }
+  return "Email not configured";
 }
 
 function renderOrders() {

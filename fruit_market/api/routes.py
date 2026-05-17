@@ -11,6 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from fruit_market.api.schemas import (
     CatalogItemView,
+    DemoStateResponse,
     KioskSSEEvent,
     KioskStateSnapshot,
     OrderView,
@@ -58,6 +59,7 @@ def get_state(request: Request) -> KioskStateSnapshot:
         get_services(request),
         get_vision(request.app),
         get_restock(request.app),
+        demo_active=bool(getattr(request.app.state, "demo_active", False)),
     )
 
 
@@ -219,6 +221,33 @@ def camera_status(request: Request) -> dict[str, object]:
     return status
 
 
+# ─── Demo control (Pico START button + kiosk fallback) ─────────────
+
+
+@router.post("/demo/start", response_model=DemoStateResponse)
+def demo_start(request: Request) -> DemoStateResponse:
+    """Open the inference gate. Streamer was already running; this
+    is what lets PaliGemma actually start counting."""
+
+    request.app.state.demo_active = True
+    return DemoStateResponse(demo_active=True)
+
+
+@router.post("/demo/stop", response_model=DemoStateResponse)
+def demo_stop(request: Request) -> DemoStateResponse:
+    """Close the inference gate. Video keeps streaming."""
+
+    request.app.state.demo_active = False
+    return DemoStateResponse(demo_active=False)
+
+
+@router.get("/demo/active", response_model=DemoStateResponse)
+def demo_active(request: Request) -> DemoStateResponse:
+    return DemoStateResponse(
+        demo_active=bool(getattr(request.app.state, "demo_active", False)),
+    )
+
+
 # ─── Pico keypad ────────────────────────────────────────────────────
 
 
@@ -238,7 +267,17 @@ def pico_action(request: Request, payload: PicoActionRequest) -> PicoActionRespo
     action = payload.action
 
     if action == "ready":
-        return PicoActionResponse(action=action, status="ok")
+        # ``ready`` doubles as the demo START button — the operator
+        # presses it to open the inference gate when they're ready
+        # for the AI to begin counting. Idempotent: a second press
+        # is a no-op.
+        was_active = bool(getattr(request.app.state, "demo_active", False))
+        request.app.state.demo_active = True
+        return PicoActionResponse(
+            action=action,
+            status="started" if not was_active else "already_started",
+            detail="demo inference gate opened",
+        )
 
     if action == "packed":
         for order in services.orders.list_active():
@@ -305,12 +344,15 @@ def build_snapshot(
     services: Services,
     vision: VisionBundle | None = None,
     restock: RestockRuntime | None = None,
+    *,
+    demo_active: bool = False,
 ) -> KioskStateSnapshot:
     active = services.catalog.get_active_item()
     active_id = active.id if active else None
     items = [_catalog_item_view(item, active_id) for item in services.catalog.list_items()]
     orders = [_order_view(services, order) for order in services.orders.list_active()]
     return KioskStateSnapshot(
+        demo_active=demo_active,
         catalog=items,
         active_item_id=active_id,
         orders=orders,
@@ -356,6 +398,12 @@ def _restock_view(restock: RestockRuntime | None) -> RestockView | None:
         supplier_name=record.supplier_name,
         amount_cents=record.amount_cents,
         status=record.status,
+        eta_minutes=record.eta_minutes,
+        basket_url=record.basket_url,
+        operator_email=record.operator_email,
+        email_status=record.email_status,
+        email_message_id=record.email_message_id,
+        email_failure_reason=record.email_failure_reason,
         eta_iso=record.eta_iso,
         failure_reason=record.failure_reason,
     )

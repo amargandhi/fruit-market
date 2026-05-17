@@ -75,8 +75,15 @@ class VisionWatcher:
         poll_interval_seconds: float | None = None,
         motion_threshold: float | None = None,
         heartbeat_seconds: float | None = None,
+        gate: Callable[[], bool] | None = None,
     ) -> None:
         self._get_active_item: Callable[[], Item | None] = catalog_active_item
+        # The gate lets the FastAPI lifespan wire the watcher to the
+        # demo-start flag: video keeps streaming, but the model
+        # doesn't run until the operator hits START on the Pico. By
+        # default the gate is always-open so the watcher works in
+        # tests + direct construction without any extra plumbing.
+        self._gate: Callable[[], bool] = gate or (lambda: True)
         # Multi-item mode: when ``catalog_items`` is provided, the
         # watcher counts every taught item each tick (up to
         # ``max_items_per_tick``). Set ``FM_VISION_MAX_ITEMS=1`` to
@@ -154,6 +161,15 @@ class VisionWatcher:
                 continue
 
     async def _tick(self) -> None:
+        # Gate: video streams continuously, but model inference is
+        # held back until the operator (or the Pico START button)
+        # opens the gate. Lets judges see the live shelf before the
+        # AI kicks in, then watch the chips light up the moment
+        # the demo starts.
+        if not self._gate():
+            self.status.last_tick_ok = True
+            return
+
         # Decide which items to count this cycle. Multi-item mode
         # (``catalog_items`` provided) counts everything taught, up
         # to ``max_items_per_tick``. Active-only mode is the

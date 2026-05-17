@@ -114,6 +114,12 @@ class RestockView(_Schema):
     supplier_name: str
     amount_cents: NonNegativeInt
     status: str
+    eta_minutes: NonNegativeInt = 0
+    basket_url: str = ""
+    operator_email: str | None = None
+    email_status: str = "not_configured"
+    email_message_id: str | None = None
+    email_failure_reason: str | None = None
     eta_iso: str | None = None
     failure_reason: str | None = None
 
@@ -137,6 +143,15 @@ class KioskStateSnapshot(_Schema):
     pending: PendingActions = Field(default_factory=PendingActions)
     restock: RestockView | None = None
     health: SystemHealth = Field(default_factory=SystemHealth)
+    # Demo control: streamer captures regardless, but inference
+    # (PaliGemma counting) only fires while ``demo_active`` is
+    # True. Flipped to True by the Pico START button (or by
+    # POST /api/demo/start from the kiosk fallback).
+    demo_active: bool = False
+
+
+class DemoStateResponse(_Schema):
+    demo_active: bool
 
 
 # ─── Kiosk: SSE ─────────────────────────────────────────────────────

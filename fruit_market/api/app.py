@@ -35,6 +35,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     warmup runs in a background daemon thread; FastAPI starts
     serving requests immediately while the model loads (~5 s) so
     the kiosk doesn't appear frozen.
+
+    ``app.state.demo_active`` is the on/off switch that gates
+    *inference* (the streamer keeps capturing regardless). The
+    Pico START button flips this to True via ``/api/demo/start``;
+    the kiosk shows a "Press START" overlay until then.
     """
 
     event_store = None
@@ -48,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.event_store = event_store
     app.state.restock = None
     app.state.vision = None
+    # The streamer captures whether or not the demo is "started".
+    # Inference (PaliGemma counts) is gated by this flag.
+    app.state.demo_active = (
+        os.environ.get("FM_DEMO_AUTOSTART", "0") == "1"
+    )
 
     if event_store is not None:
         restock = build_restock_runtime(
@@ -64,7 +74,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             from fruit_market.vision import build_default_vision
 
-            app.state.vision = await build_default_vision(services)
+            app.state.vision = await build_default_vision(
+                services,
+                gate=lambda: bool(getattr(app.state, "demo_active", False)),
+            )
             logger.info("vision pipeline started")
         except Exception as exc:  # noqa: BLE001
             # Don't fail the app if the vision deps are missing

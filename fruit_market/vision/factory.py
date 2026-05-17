@@ -79,7 +79,11 @@ class VisionBundle:
             logger.exception("camera close failed")
 
 
-async def build_default_vision(services: Services) -> VisionBundle:
+async def build_default_vision(
+    services: Services,
+    *,
+    gate: object | None = None,
+) -> VisionBundle:
     """Construct + warm up + start the default vision bundle.
 
     Intended to be called from the FastAPI lifespan::
@@ -131,6 +135,10 @@ async def build_default_vision(services: Services) -> VisionBundle:
         # own polling schedule.
         camera=StreamerCamera(streamer),
         model=model,
+        # Inference gate (default always-on). The HTTP lifespan
+        # wires this to ``app.state.demo_active`` so the model
+        # only runs after the Pico START button has been pressed.
+        gate=gate,  # type: ignore[arg-type]
     )
     await watcher.start()
 

@@ -8,6 +8,10 @@ import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from urllib.parse import urlencode
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from fruit_market.restock.supplier import (
     parse_supplier_confirmation,
@@ -15,6 +19,8 @@ from fruit_market.restock.supplier import (
 from fruit_market.state.events import (
     RestockApproved,
     RestockOrdered,
+    RestockOperatorEmailFailed,
+    RestockOperatorEmailed,
     RestockPaymentFailed,
     RestockPaymentStarted,
     RestockProposed,
@@ -52,6 +58,7 @@ class RestockCoordinator:
         catalog: CatalogService,
         supplier: SupplierQuoteClient,
         sponge: PaySpongeClient | None,
+        operator_notifier: Callable[[str, RestockRecord], str] | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
@@ -59,6 +66,7 @@ class RestockCoordinator:
         self._catalog = catalog
         self._supplier = supplier
         self._sponge = sponge
+        self._operator_notifier = operator_notifier
         self._lock = threading.Lock()
 
     def handle_stock_low(self, offset: int, event: StockLow) -> None:
@@ -80,9 +88,18 @@ class RestockCoordinator:
                 return
 
             idempotency_key = f"{event.item_id}:{offset}"
+            basket_url = _basket_url(
+                public_base=self._settings.supplier_public_base,
+                proposal_id=proposal_id,
+                item_name=quote.item_name,
+                qty=quote.qty,
+                supplier_id=quote.supplier_id,
+                amount_cents=quote.amount_cents,
+                idempotency_key=idempotency_key,
+            )
             order_body = _order_body(
                 proposal_id=proposal_id,
-                item_name=item.name,
+                item_name=quote.item_name,
                 qty=quote.qty,
                 supplier_id=quote.supplier_id,
                 amount_cents=quote.amount_cents,
@@ -108,6 +125,8 @@ class RestockCoordinator:
                     payload_hash=payload_hash,
                     idempotency_key=idempotency_key,
                     expires_at_iso=_iso(expires_at),
+                    eta_minutes=quote.eta_minutes,
+                    basket_url=basket_url,
                 )
             )
             record = self._projection.get(proposal_id)
@@ -118,6 +137,8 @@ class RestockCoordinator:
             if cap_error is not None:
                 self._fail(record.proposal_id, "caps", cap_error)
                 return
+
+            self._notify_operator(record)
 
             if self._settings.payment_mode != "staging_live":
                 return
@@ -186,6 +207,30 @@ class RestockCoordinator:
             RestockSpongePlanSubmitted(
                 proposal_id=record.proposal_id,
                 sponge_plan_id=plan.plan_id,
+            )
+        )
+
+    def _notify_operator(self, record: RestockRecord) -> None:
+        to_email = self._settings.operator_email
+        if not to_email:
+            return
+        try:
+            sender = self._operator_notifier or _send_restock_email
+            message_id = sender(to_email, record)
+        except Exception as exc:  # noqa: BLE001
+            self._store.append(
+                RestockOperatorEmailFailed(
+                    proposal_id=record.proposal_id,
+                    to_email=to_email,
+                    reason=f"operator email failed: {exc}",
+                )
+            )
+            return
+        self._store.append(
+            RestockOperatorEmailed(
+                proposal_id=record.proposal_id,
+                to_email=to_email,
+                message_id=message_id,
             )
         )
 
@@ -316,6 +361,39 @@ def _order_body(
         "amount_cents": amount_cents,
         "idempotency_key": idempotency_key,
     }
+
+
+def _basket_url(
+    *,
+    public_base: str,
+    proposal_id: str,
+    item_name: str,
+    qty: int,
+    supplier_id: str,
+    amount_cents: int,
+    idempotency_key: str,
+) -> str:
+    if not public_base:
+        return ""
+    query = urlencode(
+        {
+            "proposal_id": proposal_id,
+            "item": item_name,
+            "quantity": qty,
+            "supplier_id": supplier_id,
+            "amount_cents": amount_cents,
+            "idempotency_key": idempotency_key,
+        }
+    )
+    return f"{public_base.rstrip('/')}/basket?{query}"
+
+
+def _send_restock_email(to_email: str, record: RestockRecord) -> str:
+    from fruit_market.integrations.agentmail import (  # noqa: PLC0415
+        send_restock_approval,
+    )
+
+    return send_restock_approval(to_email, record)
 
 
 def _payload_hash(body: dict[str, object]) -> str:

@@ -254,6 +254,68 @@ html, body {
   letter-spacing: 0.12em;
 }
 
+/* "Demo not started" overlay — camera is streaming below, but
+   inference is gated. Press READY on the Pico (or the kiosk
+   button) to open the gate. Sits as a translucent layer so the
+   live video is still visible behind it. */
+
+.demo-not-started {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 22, 20, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+  backdrop-filter: blur(2px);
+}
+
+.not-started-card {
+  pointer-events: auto;
+  padding: 18px 26px;
+  border-radius: 14px;
+  background: rgba(15, 22, 20, 0.88);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 4px rgba(127, 200, 138, 0.15);
+  max-width: 520px;
+  text-align: center;
+}
+
+.not-started-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.not-started-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.not-started-hint strong {
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+.demo-state {
+  /* same shape as connection-status; gate animation matches */
+}
+
+.demo-state[data-state="off"] .dot {
+  background: var(--warning);
+  box-shadow: 0 0 8px var(--warning);
+}
+
+.demo-state[data-state="on"] .dot {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+
 .camera-counts {
   position: absolute;
   left: 16px;
@@ -613,6 +675,40 @@ html, body {
   background: var(--bg-elevated);
   border: 1px solid var(--accent-soft);
   border-radius: 10px;
+}
+
+.restock-demo-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.restock-demo-flow span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.restock-link {
+  display: block;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--accent-soft);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
 }
 
 /* ─── Responsive (single-column on narrow screens) ──────── */
