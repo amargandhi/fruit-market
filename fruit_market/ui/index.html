@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fruit Market Kiosk</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Fruit Market</h1>
+          <p id="connection-status" class="status">Connecting</p>
+        </div>
+        <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh state">
+          Refresh
+        </button>
+      </header>
+
+      <section class="board" aria-label="Kiosk">
+        <section id="catalog-panel" class="panel catalog-panel" aria-labelledby="catalog-title">
+          <div class="panel-heading">
+            <h2 id="catalog-title">Catalog</h2>
+            <span id="stock-alert" class="stock-alert" hidden>Restock</span>
+          </div>
+          <div class="active-count" aria-live="polite">
+            <span id="active-count">0</span>
+            <small id="active-label">No active item</small>
+          </div>
+          <div id="catalog-list" class="catalog-list"></div>
+        </section>
+
+        <section id="orders-panel" class="panel orders-panel" aria-labelledby="orders-title">
+          <div class="panel-heading">
+            <h2 id="orders-title">Orders</h2>
+          </div>
+          <div class="lanes">
+            <div class="lane" data-status="reserved">
+              <h3>Reserved</h3>
+              <div id="orders-reserved" class="order-list"></div>
+            </div>
+            <div class="lane" data-status="paid">
+              <h3>Paid</h3>
+              <div id="orders-paid" class="order-list"></div>
+            </div>
+            <div class="lane" data-status="packed">
+              <h3>Packed</h3>
+              <div id="orders-packed" class="order-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="teach-panel" class="panel teach-panel" aria-labelledby="teach-title">
+          <div class="panel-heading">
+            <h2 id="teach-title">Teach</h2>
+          </div>
+          <form id="teach-form" class="teach-form">
+            <label for="teach-input">Item description</label>
+            <textarea
+              id="teach-input"
+              name="transcript"
+              rows="4"
+              placeholder="These are apples, $1.50, 6 of them"
+              required
+            ></textarea>
+            <button type="submit">Propose</button>
+          </form>
+          <div id="teach-proposal" class="proposal" hidden></div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
