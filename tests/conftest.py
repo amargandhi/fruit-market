@@ -12,9 +12,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
 from fruit_market.services import Services, make_services
 from fruit_market.services._stubs import (
     StubCatalogService,
@@ -24,6 +21,34 @@ from fruit_market.services._stubs import (
     StubTeachService,
     make_stub_services,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_event_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test gets a fresh on-disk event store.
+
+    Without this, the default ``./.fruitmarket/events.db`` would be
+    shared across tests (and across runs), so any test that boots the
+    FastAPI lifespan accumulates state from every previous test.
+    Setting ``FM_EVENT_STORE_PATH`` per test pins the DB to a
+    pytest-managed temp dir that's cleaned up after the test.
+    """
+
+    monkeypatch.setenv("FM_EVENT_STORE_PATH", str(tmp_path / "events.db"))
+
+
+@pytest.fixture(autouse=True)
+def _disable_vision_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Contract tests boot the FastAPI lifespan; we don't want them
+    to open the USB camera or download PaliGemma weights. Vision
+    integration is exercised by the live smoke script
+    (``scripts/smoke_vision.py``) and the watcher unit tests."""
+
+    monkeypatch.setenv("FM_VISION_ENABLED", "0")
 
 
 @pytest.fixture

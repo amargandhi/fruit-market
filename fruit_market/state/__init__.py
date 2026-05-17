@@ -18,7 +18,14 @@ from fruit_market.state.events import (
     OrderPacked,
     OrderPaid,
     OrderReserved,
+    RestockApproved,
     RestockOrdered,
+    RestockPaymentFailed,
+    RestockPaymentStarted,
+    RestockProposed,
+    RestockReceived,
+    RestockRejected,
+    RestockSpongePlanSubmitted,
     StockLow,
 )
 
@@ -31,6 +38,13 @@ __all__ = [
     "OrderPacked",
     "OrderPaid",
     "OrderReserved",
+    "RestockApproved",
     "RestockOrdered",
+    "RestockPaymentFailed",
+    "RestockPaymentStarted",
+    "RestockProposed",
+    "RestockReceived",
+    "RestockRejected",
+    "RestockSpongePlanSubmitted",
     "StockLow",
 ]

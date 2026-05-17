@@ -157,6 +157,95 @@ class OrderCancelled(_EventBase):
 # ─── Restock (Sponge stretch) ──────────────────────────────────────
 
 
+RestockActor = Literal["pico", "api", "worker", "test"]
+
+
+class RestockProposed(_EventBase):
+    """The restock worker proposed a locked supplier payment.
+
+    This is the only event emitted directly from ``StockLow``. It
+    does not move money. The payload is intentionally complete so a
+    later Pico approval can approve this exact supplier, quantity,
+    amount, destination URL, and request body hash.
+    """
+
+    type: Literal["restock_proposed"] = "restock_proposed"
+    proposal_id: str
+    stock_low_offset: int = Field(gt=0)
+    item_id: str
+    item_name: str
+    qty: int = Field(gt=0)
+    supplier_id: str
+    supplier_name: str
+    unit_price_cents: int = Field(ge=0)
+    amount_cents: int = Field(gt=0)
+    gateway_url: str
+    payload_hash: str = Field(min_length=16)
+    idempotency_key: str = Field(min_length=8)
+    expires_at_iso: str
+
+
+class RestockSpongePlanSubmitted(_EventBase):
+    """PaySponge accepted an approval plan for the locked proposal."""
+
+    type: Literal["restock_sponge_plan_submitted"] = (
+        "restock_sponge_plan_submitted"
+    )
+    proposal_id: str
+    sponge_plan_id: str
+
+
+class RestockApproved(_EventBase):
+    """A human approved the exact proposal on the local approval surface."""
+
+    type: Literal["restock_approved"] = "restock_approved"
+    proposal_id: str
+    approved_by: RestockActor = "pico"
+    payload_hash: str = Field(min_length=16)
+    amount_cents: int = Field(gt=0)
+
+
+class RestockRejected(_EventBase):
+    """A pending proposal was explicitly rejected."""
+
+    type: Literal["restock_rejected"] = "restock_rejected"
+    proposal_id: str
+    rejected_by: RestockActor = "pico"
+    reason: str = ""
+
+
+class RestockPaymentStarted(_EventBase):
+    """The backend is about to execute the approved paid request."""
+
+    type: Literal["restock_payment_started"] = "restock_payment_started"
+    proposal_id: str
+    amount_cents: int = Field(gt=0)
+    sponge_plan_id: str | None = None
+
+
+class RestockPaymentFailed(_EventBase):
+    """Restock failed before supplier confirmation.
+
+    ``stage`` is intentionally broad for operator-facing logs:
+    proposal construction, PaySponge plan submission/approval, the
+    paid request itself, cap checks, expiry, and supplier response
+    parsing all collapse into this one terminal failure event.
+    """
+
+    type: Literal["restock_payment_failed"] = "restock_payment_failed"
+    proposal_id: str
+    stage: Literal[
+        "proposal",
+        "plan",
+        "approval",
+        "payment",
+        "supplier",
+        "caps",
+        "expired",
+    ]
+    reason: str
+
+
 class RestockOrdered(_EventBase):
     """The restock agent placed and paid for a supplier order.
 
@@ -170,6 +259,20 @@ class RestockOrdered(_EventBase):
     supplier_id: str
     sponge_payment_id: str
     eta_iso: str  # ISO-8601 datetime as a string for simple JSON serialization
+    proposal_id: str = ""
+    supplier_order_id: str = ""
+    amount_cents: int = Field(ge=0, default=0)
+    payment_receipt: str | None = None
+
+
+class RestockReceived(_EventBase):
+    """Operator confirmed the paid restock was physically received."""
+
+    type: Literal["restock_received"] = "restock_received"
+    proposal_id: str
+    item_id: str
+    qty: int = Field(gt=0)
+    source: Literal["manual", "pico", "api"] = "manual"
 
 
 # ─── The discriminated union ────────────────────────────────────────
@@ -185,7 +288,14 @@ Event = Annotated[
         | OrderPaid
         | OrderPacked
         | OrderCancelled
+        | RestockProposed
+        | RestockSpongePlanSubmitted
+        | RestockApproved
+        | RestockRejected
+        | RestockPaymentStarted
+        | RestockPaymentFailed
         | RestockOrdered
+        | RestockReceived
     ),
     Field(discriminator="type"),
 ]

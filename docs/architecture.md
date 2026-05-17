@@ -127,6 +127,55 @@ flowchart LR
 
 ---
 
+## 1a) Model choices — edge vs cloud
+
+Two language models in the system. They do different work, and
+each got picked for a deliberate reason.
+
+| Model | Where | Job | Why this one |
+|---|---|---|---|
+| **PaliGemma 2 3B mix-224** | Edge (MLX on Mac) | Perception — counts visible inventory via the native ``count {noun}\n`` task | Vision-specialised model. ~0.5 s per count warm; integer responses; deterministic with greedy decoding. No round-trip to cloud, no per-tick spend. |
+| **Gemini 3.1 Flash Lite** | Cloud (Google AI) | Routing — parses caller intent, picks a tool (``resolve_item``, ``quote_order``, ``reserve_order``, ``create_checkout``…), formats a one-sentence reply | Fast tool-calling small model. ~0.7 s end-to-end in our smoke tests. Cheap enough to run on every phone turn. |
+
+### Why Flash Lite and not the larger Flash models
+
+The phone brain isn't doing reasoning-heavy work. By the time it
+runs, perception has already happened at the edge: PaliGemma
+counted, the inventory projection is current, the catalog knows
+the prices. The brain's job is to listen for "do you have bananas?"
+and decide *call the resolve_item tool, then quote_order, then
+reserve_order*. That's routing, not deliberation.
+
+Flash Lite handles it in well under a second. Bumping to
+``gemini-2.5-flash`` triples the latency without measurably
+changing the routing decisions on the prompts we send. The
+override is one env var (``GEMINI_MODEL=gemini-2.5-flash``) for
+the rare demo that benefits.
+
+### Why not Gemini Live API
+
+The Live API is for low-latency bidirectional **audio** streaming
+— useful when the model itself is doing voice-to-voice
+conversation. We don't need that: AgentPhone already owns the
+audio leg (it transcribes the caller and synthesises the reply).
+The brain only ever sees text. Live's extra complexity (WebSocket
+session lifecycle, audio chunk handling, two-way state) would buy
+us nothing the AgentPhone webhook + Flash Lite request/response
+pair doesn't already cover.
+
+### Why not local-only
+
+We tried local-only Gemma for the brain in early sketches.
+PaliGemma owns 5.7 GB of unified memory once loaded; running a
+second multi-billion-parameter model alongside it on a 16 GB Mac
+pushes against the RAM ceiling, and tool-calling on quantised
+local LLMs is noticeably more fragile than on Flash Lite. The
+cloud call costs about a tenth of a cent per phone turn and ships
+in <1 s, so the split is "perception at the edge, routing in the
+cloud."
+
+---
+
 ## 2) Customer happy path — call to "ready for pickup"
 
 ```
