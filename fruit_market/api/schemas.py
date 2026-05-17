@@ -92,10 +92,51 @@ class OrderView(_Schema):
     customer_phone: str
 
 
+class PendingActions(_Schema):
+    """What's pending operator attention right now.
+
+    Drives the Pico keypad's per-key breathe animations: when one
+    of these is set, the corresponding action key lights up so the
+    operator knows there's something to press.
+    """
+
+    teach_proposal: str | None = None  # proposal_id or null
+    paid_order: str | None = None      # order_id or null
+    reservation: str | None = None     # order_id or null
+    supply_buy: bool = False
+
+
+class RestockView(_Schema):
+    proposal_id: str
+    item_id: str
+    item_name: str
+    qty: PositiveInt
+    supplier_name: str
+    amount_cents: NonNegativeInt
+    status: str
+    eta_iso: str | None = None
+    failure_reason: str | None = None
+
+
+class SystemHealth(_Schema):
+    """One field per subsystem the Pico keypad surfaces as an LED.
+
+    Values are restricted to the vocabulary documented in
+    ``fruit_market/hardware/pico_protocol.py`` (``ok | warmup |
+    mock | warn | fail | error | down | unknown``)."""
+
+    camera: str = "unknown"
+    model: str = "unknown"
+    phone: str = "unknown"
+
+
 class KioskStateSnapshot(_Schema):
     catalog: list[CatalogItemView]
     active_item_id: str | None
     orders: list[OrderView]
+    pending: PendingActions = Field(default_factory=PendingActions)
+    restock: RestockView | None = None
+    health: SystemHealth = Field(default_factory=SystemHealth)
 
 
 # ─── Kiosk: SSE ─────────────────────────────────────────────────────
@@ -107,6 +148,7 @@ SSEEventName = Literal[
     "state.orders",
     "state.active_item",
     "state.stock_low",
+    "state.restock",
 ]
 
 
@@ -159,3 +201,35 @@ class SwitchActiveItemRequest(_Schema):
 
 class SwitchActiveItemResponse(_Schema):
     item_id: str
+
+
+# ─── Pico sidecar action endpoint ─────────────────────────────────
+
+
+class PicoActionRequest(_Schema):
+    """POSTed by the Pico bridge when an action key is pressed.
+
+    The backend resolves the relevant resource (order_id,
+    proposal_id) from its current state — the firmware doesn't
+    know IDs, just canonical action names.
+    """
+
+    action: str = Field(min_length=1)
+
+
+class PicoActionResponse(_Schema):
+    """One dispatcher result.
+
+    ``status`` carries the textual outcome (``ok``, ``no_pending``,
+    ``acknowledged``, ``not_implemented``, ``rejected``…) and is
+    what the bridge logs. ``order_id`` / ``proposal_id`` / ``detail``
+    surface whatever resource the dispatcher acted on so the bridge
+    can correlate with the next state push.
+    """
+
+    action: str
+    status: str
+    ok: bool = True
+    detail: str = ""
+    order_id: str | None = None
+    proposal_id: str | None = None

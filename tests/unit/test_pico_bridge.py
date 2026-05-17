@@ -75,6 +75,16 @@ def test_api_state_to_payload_maps_pending_to_attention() -> None:
     assert payload.attention["supply_buy"] is True
 
 
+def test_api_state_to_payload_maps_restock_status_and_cancel_attention() -> None:
+    payload = api_state_to_payload({
+        "pending": {"supply_buy": True},
+        "restock": {"status": "pending_approval"},
+    })
+    assert payload.restock_status == "pending_approval"
+    assert payload.attention["supply_buy"] is True
+    assert payload.attention["cancel"] is True
+
+
 # ─── Bridge with mocked serial + API ───────────────────────────────
 
 

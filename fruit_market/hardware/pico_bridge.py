@@ -209,11 +209,14 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
 
     pending = state.get("pending") or {}
     pending_dict = pending if isinstance(pending, dict) else {}
+    restock = state.get("restock") or {}
+    restock_dict = restock if isinstance(restock, dict) else {}
+    supply_buy_pending = bool(pending_dict.get("supply_buy"))
     attention = {
         "confirm": bool(pending_dict.get("teach_proposal")),
         "packed": bool(pending_dict.get("paid_order")),
-        "cancel": bool(pending_dict.get("reservation")),
-        "supply_buy": bool(pending_dict.get("supply_buy")),
+        "cancel": bool(pending_dict.get("reservation")) or supply_buy_pending,
+        "supply_buy": supply_buy_pending,
     }
 
     health = state.get("health") or {}
@@ -223,11 +226,14 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
     err = state.get("error") or ""
     if isinstance(err, str):
         error_message = err
+    if not error_message and restock_dict.get("status") == "failed":
+        error_message = str(restock_dict.get("failure_reason") or "restock failed")
 
     return PicoStatePayload(
         active_item=active_name,
         active_count=active_count,
         active_low=active_low,
+        restock_status=str(restock_dict.get("status") or ""),
         attention=attention,
         health={
             "camera": str(health_dict.get("camera", "unknown")),

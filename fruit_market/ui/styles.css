@@ -167,6 +167,41 @@ h3 {
   font-weight: 700;
 }
 
+.restock-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warning-text);
+  border-radius: 8px;
+  background: #fffaf0;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+
+.restock-panel.payment_started,
+.restock-panel.approved {
+  border-left-color: #007f85;
+  background: #eefbfa;
+}
+
+.restock-panel.ordered,
+.restock-panel.received {
+  border-left-color: var(--accent);
+  background: #eff8f1;
+}
+
+.restock-panel.failed,
+.restock-panel.rejected {
+  border-left-color: var(--danger);
+  background: #fff3f1;
+}
+
+.restock-error {
+  color: var(--danger);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
 .catalog-list,
 .order-list {
   display: grid;
@@ -282,6 +317,10 @@ textarea:focus {
 
 .secondary:hover {
   background: #dce5dd;
+}
+
+.danger-secondary {
+  color: var(--danger);
 }
 
 @media (max-width: 1040px) {

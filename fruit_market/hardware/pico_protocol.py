@@ -62,6 +62,7 @@ class PicoStatePayload:
     active_item: str = ""
     active_count: int = 0
     active_low: bool = False
+    restock_status: str = ""
     attention: dict[str, bool] = field(default_factory=dict)
     health: dict[str, str] = field(default_factory=dict)
     error_message: str = ""
@@ -82,6 +83,7 @@ class PicoStatePayload:
             "active_item": self.active_item or "",
             "active_count": max(0, int(self.active_count)),
             "active_low": bool(self.active_low),
+            "restock_status": str(self.restock_status or ""),
             "attention": attention,
             "health": health,
             "error_message": str(self.error_message or ""),

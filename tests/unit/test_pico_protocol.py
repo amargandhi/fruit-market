@@ -35,6 +35,7 @@ def test_serialize_state_round_trips() -> None:
     assert parsed["event"] == "state"
     assert parsed["active_item"] == "banana"
     assert parsed["active_count"] == 3
+    assert parsed["restock_status"] == ""
     # All action names present in attention, defaulted to False.
     for name in ACTION_NAMES:
         assert name in parsed["attention"]
@@ -51,6 +52,12 @@ def test_serialize_state_clamps_negative_count_to_zero() -> None:
     payload = PicoStatePayload(active_item="x", active_count=-5)
     parsed = json.loads(serialize_state(payload).decode())
     assert parsed["active_count"] == 0
+
+
+def test_serialize_state_includes_restock_status() -> None:
+    payload = PicoStatePayload(restock_status="pending_approval")
+    parsed = json.loads(serialize_state(payload).decode())
+    assert parsed["restock_status"] == "pending_approval"
 
 
 def test_serialize_state_coerces_unknown_health_to_unknown() -> None:

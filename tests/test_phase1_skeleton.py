@@ -35,7 +35,14 @@ from fruit_market.state.events import (
     OrderPacked,
     OrderPaid,
     OrderReserved,
+    RestockApproved,
     RestockOrdered,
+    RestockPaymentFailed,
+    RestockPaymentStarted,
+    RestockProposed,
+    RestockReceived,
+    RestockRejected,
+    RestockSpongePlanSubmitted,
     StockLow,
 )
 
@@ -58,12 +65,52 @@ def test_every_event_type_instantiates() -> None:
         OrderPaid(order_id="ord_1", stripe_session_id="cs_test_123"),
         OrderPacked(order_id="ord_1"),
         OrderCancelled(order_id="ord_1", reason="timeout"),
+        RestockProposed(
+            proposal_id="restock_1",
+            stock_low_offset=1,
+            item_id="item_1",
+            item_name="banana",
+            qty=50,
+            supplier_id="sup_1",
+            supplier_name="Supplier",
+            unit_price_cents=25,
+            amount_cents=1250,
+            gateway_url="https://supplier.x402.test/orders",
+            payload_hash="a" * 64,
+            idempotency_key="item_1:1",
+            expires_at_iso="2026-05-17T15:00:00Z",
+        ),
+        RestockSpongePlanSubmitted(
+            proposal_id="restock_1",
+            sponge_plan_id="plan_1",
+        ),
+        RestockApproved(
+            proposal_id="restock_1",
+            payload_hash="a" * 64,
+            amount_cents=1250,
+        ),
+        RestockRejected(proposal_id="restock_1", reason="operator"),
+        RestockPaymentStarted(
+            proposal_id="restock_1",
+            amount_cents=1250,
+            sponge_plan_id="plan_1",
+        ),
+        RestockPaymentFailed(
+            proposal_id="restock_1",
+            stage="payment",
+            reason="declined",
+        ),
         RestockOrdered(
             item_id="item_1",
             qty=50,
             supplier_id="sup_1",
             sponge_payment_id="pay_1",
             eta_iso="2026-05-17T15:00:00Z",
+        ),
+        RestockReceived(
+            proposal_id="restock_1",
+            item_id="item_1",
+            qty=50,
         ),
     ]
     for ev in samples:

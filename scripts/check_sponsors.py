@@ -1,10 +1,11 @@
-"""Ping all 5 sponsor APIs using credentials from .env.
+"""Ping sponsor APIs using credentials from .env.
 
 Run via ``make check-sponsors`` (or ``uv run python scripts/check_sponsors.py``).
 
-Exits 0 iff every endpoint returns 200. The script never prints
-secret values — only status codes and short, non-sensitive
-identifiers. Safe to commit the output to a build log.
+Exits 0 iff every required endpoint returns 200. Optional stretch
+services can report SKIP without failing the command. The script
+never prints secret values — only status codes and short,
+non-sensitive identifiers. Safe to commit the output to a build log.
 """
 
 from __future__ import annotations
@@ -13,9 +14,13 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # AgentPhone sits behind Cloudflare and rejects urllib's default
 # User-Agent (HTTP 403 with Cloudflare error 1010). Every client in
@@ -32,6 +37,7 @@ class Probe:
     ok: bool
     code: int
     detail: str
+    skipped: bool = False
 
 
 def _client() -> httpx.Client:
@@ -103,22 +109,54 @@ def probe_moss(env: dict[str, str]) -> Probe:
     return Probe("Moss", r.status_code == 200, r.status_code, "POST /manage listIndexes")
 
 
+def probe_paysponge(env: dict[str, str]) -> Probe:
+    key = env.get("SPONGE_API_KEY", "")
+    enabled = _enabled(env.get("SPONGE_ENABLED", "")) or bool(key and "REPLACE_ME" not in key)
+    if not enabled:
+        return Probe("PaySponge", True, 0, "disabled (set SPONGE_ENABLED=1)", skipped=True)
+    if not key or "REPLACE_ME" in key:
+        return Probe("PaySponge", False, 0, "SPONGE_API_KEY not set")
+    base = env.get("SPONGE_API_BASE", "https://api.wallet.paysponge.com").rstrip("/")
+    with _client() as c:
+        r = c.get(f"{base}/api/agents/me", headers={"Authorization": f"Bearer {key}"})
+    return Probe("PaySponge", r.status_code == 200, r.status_code, "GET /api/agents/me")
+
+
+def _enabled(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on", "live"}
+
+
+def _probe_safely(
+    name: str,
+    fn: Callable[[dict[str, str]], Probe],
+    env: dict[str, str],
+) -> Probe:
+    try:
+        return fn(env)
+    except httpx.HTTPError as exc:
+        return Probe(name, False, 0, f"request failed: {type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001
+        return Probe(name, False, 0, f"probe failed: {type(exc).__name__}")
+
+
 def main() -> int:
     load_dotenv()
     env = {k: v for k, v in os.environ.items() if v is not None}
 
-    probes = [
-        probe_agentphone(env),
-        probe_gemini(env),
-        probe_stripe(env),
-        probe_agentmail(env),
-        probe_moss(env),
+    checks = [
+        ("AgentPhone", probe_agentphone),
+        ("Gemini", probe_gemini),
+        ("Stripe", probe_stripe),
+        ("AgentMail", probe_agentmail),
+        ("Moss", probe_moss),
+        ("PaySponge", probe_paysponge),
     ]
+    probes = [_probe_safely(name, fn, env) for name, fn in checks]
 
     print(f"{'sponsor':<12} {'code':<6} {'status':<8} {'detail'}")
     print("-" * 70)
     for p in probes:
-        status = "OK" if p.ok else "FAIL"
+        status = "SKIP" if p.skipped else "OK" if p.ok else "FAIL"
         print(f"{p.name:<12} {p.code:<6} {status:<8} {p.detail}")
 
     failed = [p for p in probes if not p.ok]

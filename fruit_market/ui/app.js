@@ -2,6 +2,8 @@ const state = {
   catalog: [],
   active_item_id: null,
   orders: [],
+  pending: {},
+  restock: null,
 };
 
 const els = {
@@ -10,6 +12,7 @@ const els = {
   activeCount: document.querySelector("#active-count"),
   activeLabel: document.querySelector("#active-label"),
   stockAlert: document.querySelector("#stock-alert"),
+  restockPanel: document.querySelector("#restock-panel"),
   catalogList: document.querySelector("#catalog-list"),
   reserved: document.querySelector("#orders-reserved"),
   paid: document.querySelector("#orders-paid"),
@@ -44,6 +47,8 @@ async function loadState() {
   state.catalog = next.catalog || [];
   state.active_item_id = next.active_item_id || null;
   state.orders = next.orders || [];
+  state.pending = next.pending || {};
+  state.restock = next.restock || null;
   render();
   setStatus("Live", "online");
 }
@@ -75,6 +80,12 @@ function connectStream() {
     const lowItems = JSON.parse(event.data).items || [];
     els.stockAlert.hidden = lowItems.length === 0;
   });
+  eventSource.addEventListener("state.restock", (event) => {
+    const payload = JSON.parse(event.data);
+    state.pending = payload.pending || {};
+    state.restock = payload.restock || null;
+    renderRestock();
+  });
 }
 
 function setStatus(text, className) {
@@ -85,6 +96,7 @@ function setStatus(text, className) {
 function render() {
   renderCatalog();
   renderOrders();
+  renderRestock();
 }
 
 function renderCatalog() {
@@ -116,6 +128,42 @@ function renderCatalog() {
       `,
     )
     .join("");
+}
+
+function renderRestock() {
+  const restock = state.restock;
+  if (!restock) {
+    els.restockPanel.hidden = true;
+    els.restockPanel.innerHTML = "";
+    return;
+  }
+  els.restockPanel.hidden = false;
+  const pending = restock.status === "pending_approval";
+  const failed = restock.status === "failed" || restock.status === "rejected";
+  els.restockPanel.className = `restock-panel ${restock.status}`;
+  els.restockPanel.innerHTML = `
+    <div class="row-main">
+      <strong>${escapeHtml(restock.item_name)} restock</strong>
+      <span>${dollars(restock.amount_cents)}</span>
+    </div>
+    <div class="row-meta">
+      <span>${restock.qty} from ${escapeHtml(restock.supplier_name)}</span>
+      <span>${statusLabel(restock.status)}</span>
+    </div>
+    ${
+      failed && restock.failure_reason
+        ? `<div class="restock-error">${escapeHtml(restock.failure_reason)}</div>`
+        : ""
+    }
+    ${
+      pending
+        ? `<div class="proposal-actions">
+            <button type="button" data-approve-restock>Approve</button>
+            <button class="secondary danger-secondary" type="button" data-reject-restock>Reject</button>
+          </div>`
+        : ""
+    }
+  `;
 }
 
 function renderOrders() {
@@ -216,6 +264,27 @@ async function packOrder(orderId) {
   await loadState();
 }
 
+async function picoAction(action) {
+  await api("/api/pico/action", {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+  await loadState();
+}
+
+function statusLabel(status) {
+  const labels = {
+    pending_approval: "Approval needed",
+    approved: "Approved",
+    payment_started: "Ordering",
+    ordered: "Ordered",
+    received: "Received",
+    rejected: "Rejected",
+    failed: "Failed",
+  };
+  return labels[status] || status;
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => {
     const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -231,6 +300,8 @@ document.addEventListener("click", (event) => {
   if (switchId) void switchActive(switchId);
   if (packId) void packOrder(packId);
   if (target.dataset.confirmTeach !== undefined) void confirmTeach();
+  if (target.dataset.approveRestock !== undefined) void picoAction("supply_buy");
+  if (target.dataset.rejectRestock !== undefined) void picoAction("cancel");
   if (target.dataset.rejectTeach !== undefined) {
     activeProposal = null;
     renderProposal();

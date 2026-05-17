@@ -28,9 +28,9 @@ Action keys (0-4, 7) emit JSON button events. The other keys are
 visual only — the firmware ignores presses on them so an accidental
 finger on the demo table never sends a bogus command.
 
-The supply-buy key (4) breathes blue-green when
-``supply_buy_pending`` is set, drawing the operator's attention.
-Press it to acknowledge; the host clears the flag.
+The supply-buy key (4) breathes amber when a restock payment needs
+approval, blue-green while payment/order work is in progress, green
+when confirmed, and red on reject/failure.
 """
 
 from __future__ import annotations
@@ -119,6 +119,7 @@ state = {
     "active_item": "",
     "active_count": 0,
     "active_low": False,
+    "restock_status": "",
     "attention": {
         "confirm": False,
         "packed": False,
@@ -220,7 +221,17 @@ def paint_actions(ts):
     # The supply-buy key uses a faster breathe + teal so it's
     # impossible to miss when a restock decision is pending.
     if attention.get("supply_buy"):
-        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_TEAL, scale(COLOR_TEAL, 8), ts, 380))
+        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 380))
+
+    restock_status = str(state.get("restock_status") or "")
+    if restock_status == "pending_approval":
+        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 380))
+    elif restock_status in ("approved", "payment_started"):
+        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_TEAL, scale(COLOR_TEAL, 8), ts, 420))
+    elif restock_status in ("ordered", "received"):
+        set_pad(KEY_SUPPLY_BUY, scale(COLOR_GREEN, 70))
+    elif restock_status in ("failed", "rejected"):
+        set_pad(KEY_SUPPLY_BUY, blink(COLOR_RED, scale(COLOR_RED, 10), ts, 320))
 
 
 def paint_stock(ts):
@@ -351,6 +362,7 @@ def apply_host_payload(payload):
             "active_item": payload.get("active_item", ""),
             "active_count": payload.get("active_count", 0),
             "active_low": payload.get("active_low", False),
+            "restock_status": payload.get("restock_status", ""),
             "attention": payload.get("attention", state.get("attention", {})),
             "health": payload.get("health", state.get("health", {})),
             "error_message": payload.get("error_message", ""),

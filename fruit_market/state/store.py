@@ -214,10 +214,18 @@ class _TransactionalAppender:
 
 
 def open_default_store() -> EventStore:
-    """Open the default event store under ``./.fruitmarket/events.db``.
+    """Open the default event store.
 
-    The directory matches the ignored runtime data path in
-    ``.gitignore`` so cold starts don't leak local DBs into git.
+    Path resolution:
+      1. ``$FM_EVENT_STORE_PATH`` if set (used by tests for isolation).
+      2. ``./.fruitmarket/events.db`` otherwise. Matches the ignored
+         runtime data path in ``.gitignore`` so cold starts don't
+         leak local DBs into git.
     """
 
+    import os  # noqa: PLC0415 — lazy to keep the module pure
+
+    override = os.environ.get("FM_EVENT_STORE_PATH")
+    if override:
+        return EventStore(override)
     return EventStore(Path.cwd() / ".fruitmarket" / "events.db")
