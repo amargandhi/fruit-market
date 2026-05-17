@@ -42,6 +42,13 @@ class ResolveItemOutput(_ToolModel):
     name: str
     price_cents: int = Field(ge=0)
     available_count: int = Field(ge=0)
+    variety: str = ""
+    short_description: str = ""
+    tasting_notes: str = ""
+    best_for: str = ""
+    ripeness_cues: str = ""
+    sales_tip: str = ""
+    pairings: str = ""
 
 
 # ─── list_items ─────────────────────────────────────────────────────
@@ -56,6 +63,13 @@ class ItemSummary(_ToolModel):
     name: str
     price_cents: int = Field(ge=0)
     available_count: int = Field(ge=0)
+    variety: str = ""
+    short_description: str = ""
+    tasting_notes: str = ""
+    best_for: str = ""
+    ripeness_cues: str = ""
+    sales_tip: str = ""
+    pairings: str = ""
 
 
 class ListItemsOutput(_ToolModel):

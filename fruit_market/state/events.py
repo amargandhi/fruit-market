@@ -183,6 +183,8 @@ class RestockProposed(_EventBase):
     payload_hash: str = Field(min_length=16)
     idempotency_key: str = Field(min_length=8)
     expires_at_iso: str
+    eta_minutes: int = Field(ge=0, default=0)
+    basket_url: str = ""
 
 
 class RestockSpongePlanSubmitted(_EventBase):
@@ -193,6 +195,26 @@ class RestockSpongePlanSubmitted(_EventBase):
     )
     proposal_id: str
     sponge_plan_id: str
+
+
+class RestockOperatorEmailed(_EventBase):
+    """The operator was emailed the locked restock basket and cost."""
+
+    type: Literal["restock_operator_emailed"] = "restock_operator_emailed"
+    proposal_id: str
+    to_email: str
+    message_id: str
+
+
+class RestockOperatorEmailFailed(_EventBase):
+    """Operator email failed, without changing the approval/payment gate."""
+
+    type: Literal["restock_operator_email_failed"] = (
+        "restock_operator_email_failed"
+    )
+    proposal_id: str
+    to_email: str
+    reason: str
 
 
 class RestockApproved(_EventBase):
@@ -290,6 +312,8 @@ Event = Annotated[
         | OrderCancelled
         | RestockProposed
         | RestockSpongePlanSubmitted
+        | RestockOperatorEmailed
+        | RestockOperatorEmailFailed
         | RestockApproved
         | RestockRejected
         | RestockPaymentStarted

@@ -1,7 +1,7 @@
 # Fruit Market — developer entry points.
 # All targets assume `uv` is installed (https://docs.astral.sh/uv/).
 
-.PHONY: install install-vision check test check-sponsors dev clean
+.PHONY: install install-vision check test check-sponsors dev restock-supplier restock-tunnel restock-paysponge-probe restock-live-smoke clean
 
 # Install runtime + dev deps. Idempotent.
 install:
@@ -28,6 +28,26 @@ check-sponsors:
 # Run the FastAPI app with reload. Lands in Phase 2 (Track B).
 dev:
 	uv run uvicorn fruit_market.api.app:app --reload --port 8000
+
+# Run the staging supplier API. Put this behind PaySponge Gateway/x402
+# for the optional restock demo.
+restock-supplier:
+	uv run uvicorn fruit_market.restock.demo_supplier_app:app --port 8001
+
+# Public HTTPS tunnel for the staging supplier. Use the printed
+# https://*.trycloudflare.com URL as the Gateway upstream/API URL.
+restock-tunnel:
+	cloudflared tunnel --url http://localhost:8001
+
+# Read-only check that the installed PaySponge SDK exposes the wallet
+# tools the restock bridge needs. Loads SPONGE_API_KEY from .env.
+restock-paysponge-probe:
+	uv run python scripts/probe_paysponge_bridge.py
+
+# Makes a real paid Gateway call; only run after RESTOCK_SUPPLIER_GATEWAY_URL
+# points at the PaySponge x402 /orders URL.
+restock-live-smoke:
+	FRUITMARKET_RUN_REAL_SPONGE=1 uv run pytest -q tests/contract/test_real_restock_paysponge.py
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache dist build

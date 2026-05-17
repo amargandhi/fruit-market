@@ -1,0 +1,33 @@
+{
+  "documents": [
+    {
+      "id": "fruit-market-apple-cosmic-crisp",
+      "text": "Fruit Market apple product knowledge. Item: apple. Variety: Cosmic Crisp-style red apple. Sales description: a crisp, juicy red apple with a bright sweet-tart finish. Tasting notes: crunchy first bite, honeyed sweetness, a clean tart edge, and enough juice to feel refreshing rather than heavy. Best for: eating out of hand, slicing for lunch boxes, pairing with sharp cheddar, serving with peanut butter, or adding to oats. Ripeness cues: choose firm skin, deep red color, and no soft bruised spots. Sales tip: recommend apples when a caller wants a crisp snack that is sweet enough for kids, tart enough for adults, and good with cheese or nut butter. Pairings: sharp cheddar, peanut butter, cinnamon, oats, pork, arugula.",
+      "metadata": {
+        "item": "apple",
+        "variety": "Cosmic Crisp-style red apple",
+        "category": "fruit",
+        "demo_use": "customer_sales"
+      }
+    },
+    {
+      "id": "fruit-market-banana-cavendish",
+      "text": "Fruit Market banana product knowledge. Item: banana. Variety: Cavendish banana. Sales description: a mellow, creamy banana with gentle sweetness and a soft tropical aroma. Tasting notes: light vanilla sweetness when yellow, richer honey notes as brown freckles appear, and a smooth texture that works well in smoothies. Best for: breakfast, smoothies, lunch boxes, banana bread, or a quick pre-workout snack. Ripeness cues: green tips mean firmer and less sweet; yellow is ready for snacking; brown freckles mean sweeter and better for baking. Sales tip: recommend bananas when a caller wants something soft and sweet. For same-day eating, suggest fully yellow fruit; for tomorrow, choose slightly green tips. Pairings: yogurt, oats, peanut butter, chocolate, berries, coffee.",
+      "metadata": {
+        "item": "banana",
+        "variety": "Cavendish banana",
+        "category": "fruit",
+        "demo_use": "customer_sales"
+      }
+    },
+    {
+      "id": "fruit-market-sales-comparison",
+      "text": "Fruit Market sales guidance for apples versus bananas. Recommend apples when the customer wants crunch, sweet-tart flavor, lunch-box slices, or a snack that pairs with cheese or peanut butter. Recommend bananas when the customer wants a softer, sweeter, more filling snack, a smoothie ingredient, or fruit for breakfast. If the customer asks what tastes best today, say the apples are the crisp bright choice and the bananas are the mellow creamy choice. Keep the recommendation short on voice calls and always check live inventory before promising availability.",
+      "metadata": {
+        "item": "apple,banana",
+        "category": "sales_guidance",
+        "demo_use": "voice_agent"
+      }
+    }
+  ]
+}

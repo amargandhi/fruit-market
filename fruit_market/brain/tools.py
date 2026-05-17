@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from fruit_market.brain.product_knowledge import knowledge_for
 from fruit_market.brain.tool_specs import (
     CreateCheckoutInput,
     CreateCheckoutOutput,
@@ -41,6 +42,7 @@ def resolve_item(services: Services, payload: ResolveItemInput) -> ResolveItemOu
         name=item.name,
         price_cents=item.price_cents,
         available_count=item.physical_count,
+        **_product_fields(item.name),
     )
 
 
@@ -53,6 +55,7 @@ def list_items(services: Services, payload: ListItemsInput) -> ListItemsOutput:
                 name=item.name,
                 price_cents=item.price_cents,
                 available_count=item.physical_count,
+                **_product_fields(item.name),
             )
             for item in services.catalog.list_items()
         ]
@@ -139,3 +142,18 @@ def _checkout_url(name: str) -> str:
     if value:
         return value
     return "http://localhost:8000/"
+
+
+def _product_fields(name: str) -> dict[str, str]:
+    knowledge = knowledge_for(name)
+    if knowledge is None:
+        return {}
+    return {
+        "variety": knowledge.variety,
+        "short_description": knowledge.short_description,
+        "tasting_notes": knowledge.tasting_notes,
+        "best_for": knowledge.best_for,
+        "ripeness_cues": knowledge.ripeness_cues,
+        "sales_tip": knowledge.sales_tip,
+        "pairings": knowledge.pairings,
+    }

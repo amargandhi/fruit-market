@@ -35,14 +35,25 @@ def handle_agentphone_message(
     transcript = _message_text(envelope, raw_payload)
     if not transcript:
         return "Thanks for calling Fruit Market. How can I help?"
-    return generate_reply(transcript, services)
+    caller_phone = envelope.call.from_phone if envelope.call is not None else None
+    return generate_reply(transcript, services, caller_phone=caller_phone)
 
 
-def generate_reply(transcript: str, services: Services) -> str:
+def generate_reply(
+    transcript: str,
+    services: Services,
+    *,
+    caller_phone: str | None = None,
+) -> str:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if api_key and "REPLACE_ME" not in api_key:
         try:
-            reply = _generate_with_gemini(transcript, services, api_key)
+            reply = _generate_with_gemini(
+                transcript,
+                services,
+                api_key,
+                caller_phone=caller_phone,
+            )
         except Exception:
             reply = ""
         if reply:
@@ -50,7 +61,13 @@ def generate_reply(transcript: str, services: Services) -> str:
     return _fallback_reply(services)
 
 
-def _generate_with_gemini(transcript: str, services: Services, api_key: str) -> str:
+def _generate_with_gemini(
+    transcript: str,
+    services: Services,
+    api_key: str,
+    *,
+    caller_phone: str | None = None,
+) -> str:
     genai = importlib.import_module("google.genai")
     genai_types = importlib.import_module("google.genai.types")
     client = genai.Client(api_key=api_key)
@@ -67,11 +84,17 @@ def _generate_with_gemini(transcript: str, services: Services, api_key: str) -> 
         # e.g. ``gemini-2.5-flash`` if a particular call needs richer
         # reasoning at the cost of ~3× latency.
         model=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
-        contents=transcript,
+        contents=_model_contents(transcript, caller_phone),
         config=config,
     )
     text = getattr(response, "text", "")
     return text if isinstance(text, str) else ""
+
+
+def _model_contents(transcript: str, caller_phone: str | None) -> str:
+    if caller_phone:
+        return f"Caller phone: {caller_phone}\nTranscript: {transcript}"
+    return transcript
 
 
 def _fallback_reply(services: Services) -> str:

@@ -135,7 +135,7 @@ each got picked for a deliberate reason.
 | Model | Where | Job | Why this one |
 |---|---|---|---|
 | **PaliGemma 2 3B mix-224** | Edge (MLX on Mac) | Perception — counts visible inventory via the native ``count {noun}\n`` task | Vision-specialised model. ~0.5 s per count warm; integer responses; deterministic with greedy decoding. No round-trip to cloud, no per-tick spend. |
-| **Gemini 3.1 Flash Lite** | Cloud (Google AI) | Routing — parses caller intent, picks a tool (``resolve_item``, ``quote_order``, ``reserve_order``, ``create_checkout``…), formats a one-sentence reply | Fast tool-calling small model. ~0.7 s end-to-end in our smoke tests. Cheap enough to run on every phone turn. |
+| **Gemini 3.1 Flash Lite** | Cloud (Google AI) | Routing — parses caller intent, picks a tool (``resolve_item``, ``quote_order``, ``reserve_order``, ``create_checkout``…), formats a one-sentence reply | Fast tool-calling small model. ~0.7 s end-to-end in our smoke tests. Cheap enough to run on every phone turn, with multilingual caller support from Gemini Flash Lite. |
 
 ### Why Flash Lite and not the larger Flash models
 

@@ -36,6 +36,8 @@ from fruit_market.state.events import (
     OrderPaid,
     OrderReserved,
     RestockApproved,
+    RestockOperatorEmailed,
+    RestockOperatorEmailFailed,
     RestockOrdered,
     RestockPaymentFailed,
     RestockPaymentStarted,
@@ -79,10 +81,22 @@ def test_every_event_type_instantiates() -> None:
             payload_hash="a" * 64,
             idempotency_key="item_1:1",
             expires_at_iso="2026-05-17T15:00:00Z",
+            eta_minutes=30,
+            basket_url="https://supplier.test/basket?proposal_id=restock_1",
         ),
         RestockSpongePlanSubmitted(
             proposal_id="restock_1",
             sponge_plan_id="plan_1",
+        ),
+        RestockOperatorEmailed(
+            proposal_id="restock_1",
+            to_email="operator@example.com",
+            message_id="mail_1",
+        ),
+        RestockOperatorEmailFailed(
+            proposal_id="restock_1",
+            to_email="operator@example.com",
+            reason="mail down",
         ),
         RestockApproved(
             proposal_id="restock_1",

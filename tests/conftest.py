@@ -51,6 +51,15 @@ def _disable_vision_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FM_VISION_ENABLED", "0")
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_notifications_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep contract tests from sending real emails or SMS when a
+    developer has live sponsor credentials in ``.env``."""
+
+    monkeypatch.setenv("AGENTMAIL_ENABLED", "0")
+    monkeypatch.setenv("AGENTPHONE_SEND_MODE", "mock")
+
+
 @pytest.fixture
 def services() -> Iterator[Services]:
     """Fresh in-memory services bundle for every test.

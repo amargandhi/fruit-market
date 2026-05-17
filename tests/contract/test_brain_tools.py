@@ -20,9 +20,12 @@ def test_brain_tools_cover_catalog_quote_reserve_inventory(stub_services) -> Non
     resolved = tools.resolve_item(stub_services, ResolveItemInput(query="banana"))
     assert resolved is not None
     assert resolved.item_id == item.id
+    assert resolved.variety == "Cavendish banana"
+    assert "smoothies" in resolved.best_for
 
     listed = tools.list_items(stub_services, ListItemsInput())
     assert listed.items[0].name == "banana"
+    assert "yellow" in listed.items[0].ripeness_cues
 
     quote = tools.quote_order(stub_services, QuoteOrderInput(item_id=item.id, qty=2))
     assert quote.total_cents == 200
