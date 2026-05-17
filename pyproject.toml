@@ -61,7 +61,7 @@ warn_unused_ignores = true
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["mlx_vlm.*", "cv2.*"]
+module = ["mlx_vlm.*", "cv2", "cv2.*", "PIL", "PIL.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
