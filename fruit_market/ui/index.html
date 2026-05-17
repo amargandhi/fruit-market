@@ -10,19 +10,26 @@
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <h1>Fruit Market</h1>
-          <p id="connection-status" class="status">Connecting</p>
+        <div class="brand">
+          <h1>🍓 Fruit Market</h1>
+          <p class="tagline">Physical AI agent — vision, voice, payments.</p>
         </div>
-        <button id="refresh-button" class="icon-button" type="button" aria-label="Refresh state">
-          Refresh
-        </button>
+        <div class="status-cluster">
+          <span id="connection-status" class="status-pill" data-state="off">Connecting</span>
+          <span id="edge-ai-pill" class="status-pill edge">
+            <span class="dot"></span> Edge AI
+          </span>
+          <button id="refresh-button" class="ghost-button" type="button" aria-label="Refresh state">
+            Refresh
+          </button>
+        </div>
       </header>
 
       <section class="board" aria-label="Kiosk">
+        <!-- ─── Camera (hero) ─────────────────────────────────────── -->
         <section id="camera-panel" class="panel camera-panel" aria-labelledby="camera-title">
           <div class="panel-heading">
-            <h2 id="camera-title">Camera</h2>
+            <h2 id="camera-title">Live Camera Feed</h2>
             <span id="camera-status" class="camera-status">starting…</span>
           </div>
           <div class="camera-frame">
@@ -31,67 +38,79 @@
               alt="Live camera frame from the stall"
               draggable="false"
             />
-            <div id="camera-overlay" class="camera-overlay">
-              <span id="camera-noun"></span>
-              <span id="camera-count"></span>
+            <div id="camera-overlay-empty" class="camera-overlay-empty" hidden>
+              No items taught yet
             </div>
+            <div id="camera-counts" class="camera-counts" aria-live="polite"></div>
           </div>
           <p class="camera-caption">
-            Edge AI (<code>PaliGemma 2</code>) counts the active item every
-            <span id="camera-poll">3</span>s.
+            <code>PaliGemma 2</code> counts every taught item every
+            <span id="camera-poll">~3</span>s. Add or remove fruit and the
+            numbers update within one cycle.
           </p>
         </section>
 
+        <!-- ─── Catalog (big fruit cards) ─────────────────────────── -->
         <section id="catalog-panel" class="panel catalog-panel" aria-labelledby="catalog-title">
           <div class="panel-heading">
             <h2 id="catalog-title">Catalog</h2>
-            <span id="stock-alert" class="stock-alert" hidden>Restock</span>
+            <span id="stock-alert" class="stock-alert" hidden>Restock needed</span>
           </div>
-          <div class="active-count" aria-live="polite">
-            <span id="active-count">0</span>
-            <small id="active-label">No active item</small>
+          <div id="catalog-list" class="catalog-grid">
+            <div class="catalog-empty">Teach an item to begin →</div>
           </div>
           <div id="restock-panel" class="restock-panel" hidden></div>
-          <div id="catalog-list" class="catalog-list"></div>
         </section>
 
-        <section id="orders-panel" class="panel orders-panel" aria-labelledby="orders-title">
-          <div class="panel-heading">
-            <h2 id="orders-title">Orders</h2>
-          </div>
-          <div class="lanes">
-            <div class="lane" data-status="reserved">
-              <h3>Reserved</h3>
-              <div id="orders-reserved" class="order-list"></div>
+        <!-- ─── Side rail: teach + orders ─────────────────────────── -->
+        <aside class="side-rail">
+          <section id="teach-panel" class="panel teach-panel" aria-labelledby="teach-title">
+            <div class="panel-heading">
+              <h2 id="teach-title">Teach an Item</h2>
             </div>
-            <div class="lane" data-status="paid">
-              <h3>Paid</h3>
-              <div id="orders-paid" class="order-list"></div>
-            </div>
-            <div class="lane" data-status="packed">
-              <h3>Packed</h3>
-              <div id="orders-packed" class="order-list"></div>
-            </div>
-          </div>
-        </section>
+            <form id="teach-form" class="teach-form">
+              <label for="teach-input" class="sr-only">Item description</label>
+              <textarea
+                id="teach-input"
+                name="transcript"
+                rows="3"
+                placeholder="These are apples, $1.50, 6 of them"
+                required
+              ></textarea>
+              <button type="submit" class="primary-button">Propose</button>
+            </form>
+            <div id="teach-proposal" class="proposal" hidden></div>
+          </section>
 
-        <section id="teach-panel" class="panel teach-panel" aria-labelledby="teach-title">
-          <div class="panel-heading">
-            <h2 id="teach-title">Teach</h2>
-          </div>
-          <form id="teach-form" class="teach-form">
-            <label for="teach-input">Item description</label>
-            <textarea
-              id="teach-input"
-              name="transcript"
-              rows="4"
-              placeholder="These are apples, $1.50, 6 of them"
-              required
-            ></textarea>
-            <button type="submit">Propose</button>
-          </form>
-          <div id="teach-proposal" class="proposal" hidden></div>
-        </section>
+          <section id="orders-panel" class="panel orders-panel" aria-labelledby="orders-title">
+            <div class="panel-heading">
+              <h2 id="orders-title">Orders</h2>
+              <span id="order-total" class="order-total">0</span>
+            </div>
+            <div class="lanes">
+              <div class="lane" data-status="reserved">
+                <h3>Reserved</h3>
+                <div id="orders-reserved" class="order-list"></div>
+              </div>
+              <div class="lane" data-status="paid">
+                <h3>Paid</h3>
+                <div id="orders-paid" class="order-list"></div>
+              </div>
+              <div class="lane" data-status="packed">
+                <h3>Packed</h3>
+                <div id="orders-packed" class="order-list"></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="log-panel" class="panel log-panel" aria-labelledby="log-title">
+            <div class="panel-heading">
+              <h2 id="log-title">Edge AI Log</h2>
+              <span id="log-meta" class="order-total"></span>
+            </div>
+            <div id="log-list" class="log-list" aria-live="polite"></div>
+          </section>
+        </aside>
       </section>
     </main>
     <script src="/app.js" defer></script>

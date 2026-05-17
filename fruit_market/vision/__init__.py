@@ -22,6 +22,7 @@ from fruit_market.vision.model import (
     CountModelError,
     PaliGemmaCounter,
 )
+from fruit_market.vision.streamer import CameraStreamer, StreamerCamera
 from fruit_market.vision.watcher import VisionWatcher, WatcherStatus
 
 __all__ = [
@@ -29,11 +30,13 @@ __all__ = [
     "BrokerCamera",
     "Camera",
     "CameraBackend",
+    "CameraStreamer",
     "CameraUnavailableError",
     "CountModelError",
     "Cv2Camera",
     "FileCamera",
     "PaliGemmaCounter",
+    "StreamerCamera",
     "VisionBundle",
     "VisionWatcher",
     "WatcherStatus",

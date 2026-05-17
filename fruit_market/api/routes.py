@@ -117,6 +117,44 @@ def switch_active_item(
     return SwitchActiveItemResponse(item_id=payload.item_id)
 
 
+# ─── Vision count log ──────────────────────────────────────────────
+
+
+@router.get("/vision/log")
+def vision_log(request: Request, limit: int = 25) -> dict[str, object]:
+    """Recent count events for the kiosk's live log panel.
+
+    Reads ``CountSet`` events directly from the event store so the
+    log survives kiosk reconnects and is consistent with the
+    canonical inventory projection.
+    """
+
+    from fruit_market.state.events import CountSet  # noqa: PLC0415
+
+    store = getattr(request.app.state, "event_store", None)
+    if store is None:
+        return {"entries": []}
+
+    services = get_services(request)
+    catalog = {item.id: item for item in services.catalog.list_items()}
+
+    entries: list[dict[str, object]] = []
+    for _offset, event in store.replay():
+        if not isinstance(event, CountSet):
+            continue
+        item = catalog.get(event.item_id)
+        entries.append({
+            "ts": event.ts.isoformat(),
+            "item_id": event.item_id,
+            "item_name": item.name if item else event.item_id,
+            "count": int(event.count),
+            "source": event.source,
+            "confidence": float(event.confidence),
+        })
+
+    return {"entries": entries[-max(1, min(limit, 200)) :][::-1]}
+
+
 # ─── Camera feed ────────────────────────────────────────────────────
 
 
@@ -124,10 +162,14 @@ def switch_active_item(
 def camera_frame(request: Request) -> Response:
     """Most recent camera snapshot as a JPEG.
 
-    The kiosk polls this every second for a live feed. Returns
-    503 with ``X-Camera-Status: starting`` if the watcher hasn't
-    captured anything yet (e.g. lifespan still warming up, or no
-    active item so the watcher is idle). Browsers can re-poll on
+    Reads from the streamer's continuously-updated cache, not the
+    watcher. That decoupling is what makes the kiosk feel live —
+    the streamer captures at 1-5 FPS (backend-dependent) while
+    the model runs every ~3 s on its own timer.
+
+    Returns 503 with ``X-Camera-Status: starting`` if the streamer
+    hasn't captured anything yet, or with ``X-Camera-Status: disabled``
+    when the vision pipeline is off entirely. Browsers can re-poll on
     a 503 without crashing the <img> tag.
     """
 
@@ -139,7 +181,7 @@ def camera_frame(request: Request) -> Response:
             media_type="text/plain",
             headers={"X-Camera-Status": "disabled"},
         )
-    frame = vision.watcher.latest_frame
+    frame = vision.streamer.latest_frame
     if frame is None:
         return Response(
             status_code=503,
@@ -147,6 +189,7 @@ def camera_frame(request: Request) -> Response:
             media_type="text/plain",
             headers={"X-Camera-Status": "starting"},
         )
+    age = vision.streamer.latest_frame_age_seconds
     return Response(
         content=frame,
         media_type="image/jpeg",
@@ -155,8 +198,25 @@ def camera_frame(request: Request) -> Response:
             # query-string but downstream proxies might still try.
             "Cache-Control": "no-store, max-age=0",
             "X-Camera-Status": "ok",
+            "X-Frame-Age-Seconds": f"{age:.2f}" if age is not None else "0",
         },
     )
+
+
+@router.get("/camera/status")
+def camera_status(request: Request) -> dict[str, object]:
+    """Streamer telemetry for a debug pane or status check.
+
+    Returns the streamer's per-tick stats: capture cadence,
+    motion score, frame age, total captures + failures.
+    """
+
+    vision = get_vision(request.app)
+    if vision is None:
+        return {"enabled": False}
+    status = vision.streamer.status()
+    status["enabled"] = True
+    return status
 
 
 # ─── Pico keypad ────────────────────────────────────────────────────

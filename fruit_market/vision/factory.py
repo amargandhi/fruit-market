@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from fruit_market.vision.camera import open_camera
 from fruit_market.vision.model import PaliGemmaCounter
+from fruit_market.vision.streamer import CameraStreamer, StreamerCamera
 from fruit_market.vision.watcher import VisionWatcher
 
 if TYPE_CHECKING:
@@ -43,20 +44,35 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VisionBundle:
-    """Everything the HTTP layer needs to talk to the vision stack."""
+    """Everything the HTTP layer needs to talk to the vision stack.
+
+    Three independent pieces that share one camera:
+
+    * ``streamer`` continuously captures frames into a JPEG cache.
+      The kiosk's ``/api/camera/frame.jpg`` reads from this cache
+      so the browser sees fresh frames every ~500 ms.
+    * ``watcher`` runs the model on a slower cadence (every ~3 s)
+      against whatever the streamer most recently captured.
+    * ``model`` is the PaliGemma wrapper itself.
+    """
 
     camera: CameraBackend
+    streamer: CameraStreamer
     model: PaliGemmaCounter
     watcher: VisionWatcher
 
     async def shutdown(self) -> None:
-        """Stop the watcher and release the camera. Safe to call
-        even if the bundle was never fully initialised."""
+        """Stop the watcher + streamer and release the camera.
+        Safe to call even if the bundle was never fully built."""
 
         try:
             await self.watcher.stop()
         except Exception:  # noqa: BLE001
             logger.exception("vision watcher stop failed")
+        try:
+            self.streamer.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("camera streamer stop failed")
         try:
             self.camera.close()
         except Exception:  # noqa: BLE001
@@ -92,6 +108,15 @@ async def build_default_vision(services: Services) -> VisionBundle:
     # so /api/state and webhooks come up while the model loads.
     model.warmup_async()
 
+    # Start the camera streamer. It runs its own daemon thread,
+    # captures continuously into a JPEG cache, and serves both the
+    # watcher (via StreamerCamera) and the HTTP frame endpoint.
+    # Decoupling capture from inference means the browser-side
+    # video updates at 1-5 FPS even though the model only runs
+    # every 3 s.
+    streamer = CameraStreamer(camera)
+    streamer.start()
+
     watcher = VisionWatcher(
         catalog_active_item=services.catalog.get_active_item,
         # Multi-item mode: count every taught item each tick (up to
@@ -100,9 +125,18 @@ async def build_default_vision(services: Services) -> VisionBundle:
         # just the highlighted "active" pick.
         catalog_items=services.catalog.list_items,
         inventory=services.inventory,
-        camera=camera,
+        # The watcher reads from the streamer's cache, not the
+        # camera directly — that's the trick that gives us smooth
+        # browser-side video while keeping the model on its
+        # own polling schedule.
+        camera=StreamerCamera(streamer),
         model=model,
     )
     await watcher.start()
 
-    return VisionBundle(camera=camera, model=model, watcher=watcher)
+    return VisionBundle(
+        camera=camera,
+        streamer=streamer,
+        model=model,
+        watcher=watcher,
+    )

@@ -22,8 +22,11 @@ const els = {
   teachProposal: document.querySelector("#teach-proposal"),
   cameraFeed: document.querySelector("#camera-feed"),
   cameraStatus: document.querySelector("#camera-status"),
-  cameraNoun: document.querySelector("#camera-noun"),
-  cameraCount: document.querySelector("#camera-count"),
+  cameraCounts: document.querySelector("#camera-counts"),
+  cameraOverlayEmpty: document.querySelector("#camera-overlay-empty"),
+  logList: document.querySelector("#log-list"),
+  logMeta: document.querySelector("#log-meta"),
+  cameraPoll: document.querySelector("#camera-poll"),
 };
 
 let eventSource = null;
@@ -319,13 +322,40 @@ void loadState();
 connectStream();
 
 // ─── Live camera feed ───────────────────────────────────────────────
-// Polls /api/camera/frame.jpg every second. We don't use MJPEG because
-// the watcher cadence is ~3 s anyway — at higher rates the browser
-// would just be re-rendering the same bytes. The overlay shows the
-// active noun and PaliGemma's most recent count so the operator can
-// tell at a glance what the model "sees".
+// The streamer captures continuously at 1-5 FPS (per backend) into a
+// JPEG cache. We poll the cache every 500 ms — so the browser sees
+// fresh frames at the streamer's rate, decoupled from the model loop.
+// Each PaliGemma tick (~3 s) updates the catalog counts via SSE;
+// those drive the overlay chips.
 
-const CAMERA_POLL_MS = 1000;
+const CAMERA_POLL_MS = 500;
+
+const FRUIT_ICONS = {
+  apple: "🍎",
+  banana: "🍌",
+  orange: "🍊",
+  lemon: "🍋",
+  pear: "🍐",
+  grape: "🍇",
+  strawberry: "🍓",
+  cherry: "🍒",
+  peach: "🍑",
+  watermelon: "🍉",
+  pineapple: "🍍",
+  mango: "🥭",
+  avocado: "🥑",
+  tomato: "🍅",
+  carrot: "🥕",
+};
+
+function fruitIcon(name) {
+  const lower = (name || "").toLowerCase().trim();
+  // Match singular and plural ("apple" / "apples").
+  for (const key of Object.keys(FRUIT_ICONS)) {
+    if (lower === key || lower === `${key}s`) return FRUIT_ICONS[key];
+  }
+  return "🛒";
+}
 
 function refreshCameraFeed() {
   if (!els.cameraFeed) return;
@@ -335,37 +365,106 @@ function refreshCameraFeed() {
 }
 
 function refreshCameraOverlay() {
-  if (!els.cameraNoun || !els.cameraCount) return;
-  if (!state.catalog || state.catalog.length === 0) {
-    els.cameraNoun.textContent = "no items taught";
-    els.cameraCount.textContent = "—";
+  if (!els.cameraCounts) return;
+  const empty = !state.catalog || state.catalog.length === 0;
+  if (els.cameraOverlayEmpty) els.cameraOverlayEmpty.hidden = !empty;
+  if (empty) {
+    els.cameraCounts.innerHTML = "";
     return;
   }
-  // Multi-item mode: show every taught noun's count separated by ·
-  // e.g. "apple 3 · banana 3". The active item is bold via CSS.
-  const parts = state.catalog
-    .map((item) => `${item.name} ${item.physical_count}`)
-    .join("  ·  ");
-  els.cameraNoun.textContent = parts;
-  // Keep the big-number cell focused on the active item if any.
   const activeId = state.active_item_id;
-  const active = activeId
-    ? state.catalog.find((item) => item.item_id === activeId)
-    : null;
-  els.cameraCount.textContent = active ? `${active.physical_count}` : "";
+  const html = state.catalog
+    .map((item) => {
+      const active = item.item_id === activeId ? "true" : "false";
+      const icon = fruitIcon(item.name);
+      return `
+        <span class="camera-count-chip" data-active="${active}">
+          <span class="icon">${icon}</span>
+          <span class="noun">${item.name}</span>
+          <span class="num">${item.physical_count}</span>
+        </span>`;
+    })
+    .join("");
+  els.cameraCounts.innerHTML = html;
 }
 
 if (els.cameraFeed) {
   els.cameraFeed.addEventListener("error", () => {
-    if (els.cameraStatus) els.cameraStatus.textContent = "starting…";
+    if (els.cameraStatus) {
+      els.cameraStatus.textContent = "starting…";
+      els.cameraStatus.dataset.state = "off";
+    }
   });
   els.cameraFeed.addEventListener("load", () => {
-    if (els.cameraStatus) els.cameraStatus.textContent = "live";
+    if (els.cameraStatus) {
+      els.cameraStatus.textContent = "live";
+      els.cameraStatus.dataset.state = "live";
+    }
   });
   refreshCameraFeed();
   refreshCameraOverlay();
   setInterval(refreshCameraFeed, CAMERA_POLL_MS);
-  // Overlay just reads `state`, so it can update more often than the
-  // image and stays in sync with SSE catalog pushes.
-  setInterval(refreshCameraOverlay, 500);
+  setInterval(refreshCameraOverlay, 400);
+}
+
+// ─── Edge AI Log ────────────────────────────────────────────────────
+// Polls /api/vision/log every 1.5 s. Shows the last N count events with
+// time + noun + integer. Recent rows (last 4 s) get a left accent to
+// draw the eye to fresh model output.
+
+const LOG_POLL_MS = 1500;
+const LOG_FRESH_WINDOW_MS = 4000;
+const LOG_MAX_ROWS = 12;
+
+let lastLogTs = null;
+
+function formatTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+async function refreshLog() {
+  if (!els.logList) return;
+  let entries;
+  try {
+    const res = await fetch("/api/vision/log?limit=" + LOG_MAX_ROWS);
+    if (!res.ok) return;
+    const data = await res.json();
+    entries = Array.isArray(data.entries) ? data.entries : [];
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  const html = entries
+    .slice(0, LOG_MAX_ROWS)
+    .map((e) => {
+      const ts = new Date(e.ts).getTime();
+      const fresh = !isNaN(ts) && now - ts < LOG_FRESH_WINDOW_MS;
+      const icon = fruitIcon(e.item_name);
+      return `
+        <div class="log-row${fresh ? " new" : ""}">
+          <span class="ts">${formatTime(e.ts)}</span>
+          <span class="noun">${icon} <strong>${e.item_name}</strong> &rarr;</span>
+          <span class="num">${e.count}</span>
+        </div>`;
+    })
+    .join("");
+  els.logList.innerHTML = html;
+  if (els.logMeta) {
+    els.logMeta.textContent = entries.length
+      ? `${entries.length} recent count${entries.length === 1 ? "" : "s"}`
+      : "";
+  }
+  if (entries.length > 0) lastLogTs = entries[0].ts;
+}
+
+if (els.logList) {
+  void refreshLog();
+  setInterval(() => void refreshLog(), LOG_POLL_MS);
 }
