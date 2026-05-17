@@ -13,6 +13,7 @@ from fruit_market.vision.camera import (
     CameraBackend,
     CameraUnavailableError,
     Cv2Camera,
+    FileCamera,
     open_camera,
 )
 from fruit_market.vision.factory import VisionBundle, build_default_vision
@@ -31,6 +32,7 @@ __all__ = [
     "CameraUnavailableError",
     "CountModelError",
     "Cv2Camera",
+    "FileCamera",
     "PaliGemmaCounter",
     "VisionBundle",
     "VisionWatcher",

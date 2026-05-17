@@ -223,6 +223,57 @@ class BrokerCamera:
         return
 
 
+# ─── FileCamera ────────────────────────────────────────────────────
+
+
+class FileCamera:
+    """Read a pinned JPEG from disk every tick.
+
+    Used when:
+
+    * The host process can't get macOS camera permission (e.g.
+      the bridge is launched from a sandboxed parent like Claude
+      Code), but you still want the full vision pipeline running
+      against a real image of the scene.
+    * Reproducible bench runs — pin the JPEG, vary the model or
+      prompt, compare counts.
+
+    Settings (env):
+      * ``FM_CAMERA_FILE`` — path to the JPEG (default
+        ``/tmp/fruit-market-smoke.jpg``).
+
+    The file is re-read on every ``snapshot()`` so you can hot-swap
+    the image during a demo by overwriting the file (e.g. with
+    ``open`` to FruitMarketCamera.app or ``imagesnap``). Raises
+    :class:`CameraUnavailableError` if the file is missing or empty.
+    """
+
+    def __init__(self, file_path: str | None = None) -> None:
+        explicit = file_path or os.environ.get(
+            "FM_CAMERA_FILE", "/tmp/fruit-market-smoke.jpg"
+        )
+        self._path = Path(explicit)
+        self._lock = threading.Lock()
+
+    def snapshot(self) -> bytes:
+        with self._lock:
+            if not self._path.exists():
+                raise CameraUnavailableError(
+                    f"FileCamera: {self._path} does not exist. "
+                    "Capture an image (FruitMarketCamera.app, imagesnap, "
+                    "AirDrop, etc.) and try again."
+                )
+            data = self._path.read_bytes()
+            if not data:
+                raise CameraUnavailableError(
+                    f"FileCamera: {self._path} is empty."
+                )
+            return data
+
+    def close(self) -> None:
+        return
+
+
 # ─── Factory ───────────────────────────────────────────────────────
 
 
@@ -232,16 +283,20 @@ def open_camera() -> CameraBackend:
     Values:
       * ``cv2``    — use :class:`Cv2Camera` only; raise if it fails.
       * ``broker`` — use :class:`BrokerCamera` only.
+      * ``file``   — use :class:`FileCamera` (pinned JPEG, TCC-free).
       * ``auto``   — try cv2, fall back to broker if cv2 raises.
 
     Default is ``cv2`` to preserve the original behavior; flip to
     ``broker`` when running under a sandboxed parent (e.g. Claude's
-    embedded terminal). ``auto`` is convenient for local dev.
+    embedded terminal), or ``file`` for reproducible bench runs.
+    ``auto`` is convenient for local dev.
     """
 
     backend = os.environ.get("FM_CAMERA_BACKEND", "cv2").lower()
     if backend == "broker":
         return BrokerCamera()
+    if backend == "file":
+        return FileCamera()
     if backend == "auto":
         cam: CameraBackend = Cv2Camera()
         try:
