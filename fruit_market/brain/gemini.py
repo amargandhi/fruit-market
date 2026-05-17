@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from fruit_market.services.protocols import Services
 
 ToolCallable = Callable[..., dict[str, object] | None]
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 
 def handle_agentphone_message(
@@ -60,7 +61,7 @@ def _generate_with_gemini(transcript: str, services: Services, api_key: str) -> 
         temperature=0.2,
     )
     response = client.models.generate_content(
-        model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+        model=os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         contents=transcript,
         config=config,
     )
