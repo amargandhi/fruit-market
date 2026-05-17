@@ -20,6 +20,7 @@ def create(
     success_url: str,
     cancel_url: str,
     customer_phone: str,
+    metadata: Mapping[str, str] | None = None,
 ) -> stripe.checkout.Session:
     if qty <= 0:
         raise ValueError("qty must be > 0")
@@ -32,7 +33,7 @@ def create(
         cancel_url=cancel_url,
         customer_creation="if_required",
         phone_number_collection={"enabled": True},
-        metadata={"customer_phone": customer_phone},
+        metadata={"customer_phone": customer_phone, **(metadata or {})},
         line_items=[
             {
                 "quantity": qty,
@@ -45,6 +46,13 @@ def create(
         ],
     )
     return session
+
+
+def session_url(session: stripe.checkout.Session) -> str:
+    url = session["url"]
+    if not isinstance(url, str) or not url:
+        raise RuntimeError("Stripe Checkout session did not include a url")
+    return url
 
 
 def verify_webhook(headers: Mapping[str, str], body: bytes) -> stripe.Event:
