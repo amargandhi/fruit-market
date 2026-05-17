@@ -14,16 +14,21 @@ router should serialize it directly; don't redefine it here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-if TYPE_CHECKING:
-    from fruit_market.services.protocols import OrderStatus
-
 
 class _Schema(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # tolerate sponsor schema drift
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )  # tolerate sponsor schema drift
+
+
+NonNegativeInt = Annotated[int, Field(ge=0, strict=True)]
+PositiveInt = Annotated[int, Field(gt=0, strict=True)]
+OrderStatus = Literal["reserved", "paid", "packed", "cancelled"]
 
 
 # ─── AgentPhone webhook envelope ────────────────────────────────────
@@ -44,7 +49,7 @@ class AgentPhoneWebhookEnvelope(_Schema):
     ``extra="ignore"`` lets us evolve without crashing on new fields.
     """
 
-    type: str  # "call.started" | "call.transcript" | "message.received" | ...
+    type: str = Field(alias="event")
     call: AgentPhoneCallContext | None = None
     transcript: str | None = None
     message: str | None = None
@@ -71,8 +76,8 @@ class StripeWebhookEnvelope(_Schema):
 class CatalogItemView(_Schema):
     item_id: str
     name: str
-    price_cents: int
-    physical_count: int
+    price_cents: NonNegativeInt
+    physical_count: NonNegativeInt
     is_active: bool
     is_low: bool
 
@@ -81,8 +86,8 @@ class OrderView(_Schema):
     order_id: str
     item_id: str
     item_name: str
-    qty: int
-    total_cents: int
+    qty: PositiveInt
+    total_cents: NonNegativeInt
     status: OrderStatus
     customer_phone: str
 
@@ -114,7 +119,7 @@ class KioskSSEEvent(_Schema):
 
     event: SSEEventName
     data: dict[str, object]
-    id: int  # monotonic offset for SSE reconnect
+    id: NonNegativeInt  # monotonic offset for SSE reconnect
 
 
 # ─── Kiosk: teach ───────────────────────────────────────────────────
@@ -127,9 +132,9 @@ class TeachRequest(_Schema):
 class TeachProposalView(_Schema):
     proposal_id: str
     name: str
-    price_cents: int
-    initial_count: int
-    reorder_threshold: int
+    price_cents: NonNegativeInt
+    initial_count: NonNegativeInt
+    reorder_threshold: NonNegativeInt
 
 
 class TeachResponse(_Schema):

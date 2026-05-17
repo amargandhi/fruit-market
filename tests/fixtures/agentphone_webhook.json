@@ -1,0 +1,1 @@
+{"event":"agent.message","channel":"sms","timestamp":"2026-05-17T19:00:00Z","agentId":"agt_test","data":{"conversationId":"conv_test","numberId":"num_test","from":"+15551234567","to":"+15557654321","message":"Do you have apples?","direction":"inbound","receivedAt":"2026-05-17T19:00:00Z"}}
