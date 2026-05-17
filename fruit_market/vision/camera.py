@@ -1,4 +1,4 @@
-"""USB camera snapshot via OpenCV / AVFoundation on macOS.
+"""Camera snapshot — two backends behind one interface.
 
 Single responsibility: open the camera, return a JPEG ``bytes``
 snapshot. Recovering from "camera went to sleep" / "another process
@@ -6,17 +6,31 @@ grabbed it" is the caller's concern — we raise
 :class:`CameraUnavailableError` and let the watcher decide whether
 to retry or escalate.
 
-The default device index is read from ``FM_CAMERA_INDEX`` (env) or
-falls back to ``0``. Resolution is configurable for the demo
-(higher → slower model inference; lower → cheaper but counts can
-get fuzzy).
+Two backends:
+
+* :class:`Cv2Camera` — opencv-python + AVFoundation. Works when the
+  Python process's parent app has been granted camera permission in
+  macOS Privacy & Security (Terminal, iTerm, etc.). Indexes via
+  ``FM_CAMERA_INDEX`` (default 0).
+* :class:`BrokerCamera` — subprocess-calls ``apps/fm-camera/
+  FruitMarketCamera.app/Contents/MacOS/fm-camera``. The helper .app
+  has its own TCC entry, so this works even when Python's parent
+  process is sandboxed. Selects the device by name substring via
+  ``FM_CAMERA_DEVICE`` (default "C920").
+
+The :func:`open_camera` factory picks one based on
+``FM_CAMERA_BACKEND``: ``cv2`` (default), ``broker``, or ``auto``
+(try cv2 first, fall back to broker on failure).
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
+import tempfile
 import threading
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     import cv2
@@ -26,7 +40,17 @@ class CameraUnavailableError(RuntimeError):
     """Raised when no frame can be read from the configured device."""
 
 
-class Camera:
+class CameraBackend(Protocol):
+    """Duck-typed contract: anything with snapshot() + close() works
+    as the watcher's camera. _FakeCamera in tests conforms to this
+    too."""
+
+    def snapshot(self) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class Cv2Camera:
     """Thin wrapper around ``cv2.VideoCapture`` with a lock.
 
     OpenCV's VideoCapture is not thread-safe; the lock here lets the
@@ -51,6 +75,7 @@ class Camera:
         self._jpeg_quality = jpeg_quality
         self._lock = threading.Lock()
         self._cap: cv2.VideoCapture | None = None
+        self._warmed: bool = False
 
     def _ensure_open(self) -> cv2.VideoCapture:
         if self._cap is not None and self._cap.isOpened():
@@ -86,11 +111,10 @@ class Camera:
         with self._lock:
             cap = self._ensure_open()
             # Warm-up frames are cheap; only do them right after open.
-            warmup_needed = getattr(cap, "_fm_warmed", False) is False
-            if warmup_needed:
+            if not self._warmed:
                 for _ in range(2):
                     cap.read()
-                cap._fm_warmed = True
+                self._warmed = True
 
             ok, frame = cap.read()
             if not ok or frame is None:
@@ -113,3 +137,118 @@ class Camera:
             if self._cap is not None:
                 self._cap.release()
                 self._cap = None
+                self._warmed = False
+
+
+# Keep the public name ``Camera`` pointing at the cv2 backend for
+# back-compat with tests and the watcher fixture. New code should
+# prefer the explicit class name or the ``open_camera`` factory.
+Camera = Cv2Camera
+
+
+# ─── BrokerCamera ──────────────────────────────────────────────────
+
+
+# Path to the helper .app's main executable, relative to repo root.
+# The .app is built by ``apps/fm-camera/build.sh``.
+_DEFAULT_BROKER_BIN = "apps/fm-camera/FruitMarketCamera.app/Contents/MacOS/fm-camera"
+
+
+class BrokerCamera:
+    """Snapshot via the ``fm-camera`` helper binary.
+
+    The helper is a code-signed .app bundle with its own TCC entry,
+    so it can capture even when Python's parent process can't. We
+    call it as a one-shot subprocess per snapshot.
+
+    Settings (env):
+      * ``FM_CAMERA_DEVICE`` — substring match against the device's
+        ``localizedName`` (default ``"C920"``).
+      * ``FM_CAMERA_BROKER_BIN`` — absolute path to the helper
+        binary, overrides the default.
+
+    Latency: ~1.5 s per snapshot (1 s auto-exposure settle + capture
+    + write). That's fine for the 3 s watcher poll; if you need
+    faster, drop the settle in main.swift.
+    """
+
+    def __init__(
+        self,
+        device_query: str | None = None,
+        binary_path: str | None = None,
+    ) -> None:
+        self._device = device_query or os.environ.get("FM_CAMERA_DEVICE", "C920")
+        # Resolve the binary path: env override, else default relative
+        # to cwd (typically the repo root). We don't search PATH —
+        # this binary lives inside the project tree by design.
+        explicit = binary_path or os.environ.get("FM_CAMERA_BROKER_BIN")
+        if explicit is not None:
+            self._binary = Path(explicit)
+        else:
+            self._binary = Path.cwd() / _DEFAULT_BROKER_BIN
+        self._lock = threading.Lock()
+
+    def snapshot(self) -> bytes:
+        if not self._binary.exists():
+            raise CameraUnavailableError(
+                f"fm-camera binary not found at {self._binary}. "
+                f"Build it with: cd apps/fm-camera && ./build.sh"
+            )
+
+        with self._lock, tempfile.NamedTemporaryFile(
+            suffix=".jpg", delete=False
+        ) as tmp:
+            output_path = Path(tmp.name)
+
+        try:
+            result = subprocess.run(
+                [str(self._binary), self._device, str(output_path)],
+                capture_output=True,
+                timeout=20,
+            )
+            if result.returncode != 0:
+                msg = result.stderr.decode(errors="replace").strip()
+                raise CameraUnavailableError(
+                    f"fm-camera exit {result.returncode}: {msg}"
+                )
+            data = output_path.read_bytes()
+            if not data:
+                raise CameraUnavailableError("fm-camera produced empty file")
+            return data
+        finally:
+            output_path.unlink(missing_ok=True)
+
+    def close(self) -> None:
+        # No persistent resources — each snapshot is a one-shot.
+        return
+
+
+# ─── Factory ───────────────────────────────────────────────────────
+
+
+def open_camera() -> CameraBackend:
+    """Pick a camera backend based on ``FM_CAMERA_BACKEND``.
+
+    Values:
+      * ``cv2``    — use :class:`Cv2Camera` only; raise if it fails.
+      * ``broker`` — use :class:`BrokerCamera` only.
+      * ``auto``   — try cv2, fall back to broker if cv2 raises.
+
+    Default is ``cv2`` to preserve the original behavior; flip to
+    ``broker`` when running under a sandboxed parent (e.g. Claude's
+    embedded terminal). ``auto`` is convenient for local dev.
+    """
+
+    backend = os.environ.get("FM_CAMERA_BACKEND", "cv2").lower()
+    if backend == "broker":
+        return BrokerCamera()
+    if backend == "auto":
+        cam: CameraBackend = Cv2Camera()
+        try:
+            # Probe one frame so we know cv2 actually works.
+            _ = cam.snapshot()
+            return cam
+        except CameraUnavailableError:
+            cam.close()
+            return BrokerCamera()
+    return Cv2Camera()
