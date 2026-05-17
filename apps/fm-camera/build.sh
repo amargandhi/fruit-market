@@ -30,6 +30,7 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp Info.plist "$APP_BUNDLE/Contents/Info.plist"
 cp "$BIN" "$APP_BUNDLE/Contents/MacOS/fm-camera"
+cp Resources/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 chmod +x "$APP_BUNDLE/Contents/MacOS/fm-camera"
 
 # Ad-hoc sign so macOS treats this as a stable identity for TCC.
