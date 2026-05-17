@@ -1,0 +1,50 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+._*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursor/
+.aider*
+
+# Build artifacts
+dist/
+build/
+*.egg
+.eggs/
+
+# Runtime data (local SQLite + camera frames + logs)
+.fruitmarket/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Swift build (for the camera broker, later)
+.build/
+
+# Logs
+*.log
+/tmp/fruit-market/
+
+# Python venv at the repo's parent level (we look there first)
+../.venv/
