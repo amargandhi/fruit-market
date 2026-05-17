@@ -94,6 +94,11 @@ async def build_default_vision(services: Services) -> VisionBundle:
 
     watcher = VisionWatcher(
         catalog_active_item=services.catalog.get_active_item,
+        # Multi-item mode: count every taught item each tick (up to
+        # FM_VISION_MAX_ITEMS, default 4). Keeps the kiosk's per-item
+        # physical_count live for everything in the catalog, not
+        # just the highlighted "active" pick.
+        catalog_items=services.catalog.list_items,
         inventory=services.inventory,
         camera=camera,
         model=model,

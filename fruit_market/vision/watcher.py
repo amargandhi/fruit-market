@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
 class WatcherStatus:
     running: bool = False
     last_tick_ok: bool = False
-    last_count: int | None = None
+    # Per-noun results from the most recent successful tick.
+    # ``last_counts["banana"] = 3`` etc. Multi-item mode populates
+    # every taught noun each cycle.
+    last_counts: dict[str, int] = field(default_factory=dict)
+    last_count: int | None = None  # active item, kept for back-compat
     last_active_item: str | None = None
     last_skipped_motion: bool = False
     consecutive_failures: int = 0
@@ -66,11 +70,23 @@ class VisionWatcher:
         inventory: InventoryService,
         camera: CameraBackend,
         model: PaliGemmaCounter,
+        catalog_items: Callable[[], list[Item]] | None = None,
+        max_items_per_tick: int | None = None,
         poll_interval_seconds: float | None = None,
         motion_threshold: float | None = None,
         heartbeat_seconds: float | None = None,
     ) -> None:
         self._get_active_item: Callable[[], Item | None] = catalog_active_item
+        # Multi-item mode: when ``catalog_items`` is provided, the
+        # watcher counts every taught item each tick (up to
+        # ``max_items_per_tick``). Set ``FM_VISION_MAX_ITEMS=1`` to
+        # fall back to active-only.
+        self._get_catalog_items: Callable[[], list[Item]] | None = catalog_items
+        self._max_items_per_tick = (
+            max_items_per_tick
+            if max_items_per_tick is not None
+            else int(os.environ.get("FM_VISION_MAX_ITEMS", "4"))
+        )
         self._inventory = inventory
         self._camera = camera
         self._model = model
@@ -138,14 +154,19 @@ class VisionWatcher:
                 continue
 
     async def _tick(self) -> None:
+        # Decide which items to count this cycle. Multi-item mode
+        # (``catalog_items`` provided) counts everything taught, up
+        # to ``max_items_per_tick``. Active-only mode is the
+        # fallback when no multi-item callback was given.
         active: Item | None = self._get_active_item()
-        if active is None:
+        items_to_count: list[Item] = self._select_items_to_count(active)
+        if not items_to_count:
             # Nothing to count yet. Don't burn cycles on snapshots.
-            self.status.last_active_item = None
+            self.status.last_active_item = active.id if active else None
             self.status.last_tick_ok = True
             return
 
-        self.status.last_active_item = active.id
+        self.status.last_active_item = active.id if active else None
 
         # Run the blocking IO (camera + model) on the default
         # executor so the asyncio loop stays responsive.
@@ -173,20 +194,55 @@ class VisionWatcher:
         self.status.last_skipped_motion = False
         self._previous_frame = frame
 
-        count = await loop.run_in_executor(None, self._model.count, frame, active.name)
-        self.status.last_count = count
+        # One model call per item. PaliGemma ~0.5 s per call warm; for
+        # 2-4 items this stays well inside the 3 s poll budget. Each
+        # call is independent — a misfire on one doesn't poison the
+        # others. We reconcile per item so the catalog updates piece
+        # by piece if a later call hangs.
+        counts: dict[str, int] = {}
+        for item in items_to_count:
+            try:
+                count = await loop.run_in_executor(
+                    None, self._model.count, frame, item.name
+                )
+            except Exception:
+                logger.exception("model count failed for %r", item.name)
+                continue
+            counts[item.name] = count
+            self._inventory.reconcile_physical_count(
+                item_id=item.id,
+                count=count,
+                source="model",
+                confidence=0.9,
+            )
+
+        if not counts:
+            self.status.consecutive_failures += 1
+            self.status.last_tick_ok = False
+            return
+
+        self.status.last_counts = counts
+        # Back-compat: ``last_count`` is the active item's count if
+        # we have one, else the first counted noun.
+        if active is not None and active.name in counts:
+            self.status.last_count = counts[active.name]
+        else:
+            self.status.last_count = next(iter(counts.values()))
         self.status.last_count_at_monotonic = time.monotonic()
         self.status.consecutive_failures = 0
         self.status.last_tick_ok = True
 
-        # Reconcile is cheap (in-process SQLite append + projection
-        # update); we don't need to push it onto the executor.
-        self._inventory.reconcile_physical_count(
-            item_id=active.id,
-            count=count,
-            source="model",
-            confidence=0.9,
-        )
+    def _select_items_to_count(self, active: Item | None) -> list[Item]:
+        """Multi-item mode if a catalog callback was provided;
+        otherwise just the active item."""
+
+        if self._get_catalog_items is not None:
+            items = self._get_catalog_items()
+            if items:
+                return items[: max(1, self._max_items_per_tick)]
+        if active is None:
+            return []
+        return [active]
 
     # ─── public reads ─────────────────────────────────────────────
 

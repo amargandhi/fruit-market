@@ -336,20 +336,23 @@ function refreshCameraFeed() {
 
 function refreshCameraOverlay() {
   if (!els.cameraNoun || !els.cameraCount) return;
+  if (!state.catalog || state.catalog.length === 0) {
+    els.cameraNoun.textContent = "no items taught";
+    els.cameraCount.textContent = "—";
+    return;
+  }
+  // Multi-item mode: show every taught noun's count separated by ·
+  // e.g. "apple 3 · banana 3". The active item is bold via CSS.
+  const parts = state.catalog
+    .map((item) => `${item.name} ${item.physical_count}`)
+    .join("  ·  ");
+  els.cameraNoun.textContent = parts;
+  // Keep the big-number cell focused on the active item if any.
   const activeId = state.active_item_id;
-  if (!activeId) {
-    els.cameraNoun.textContent = "no active item";
-    els.cameraCount.textContent = "—";
-    return;
-  }
-  const active = state.catalog.find((item) => item.item_id === activeId);
-  if (!active) {
-    els.cameraNoun.textContent = "?";
-    els.cameraCount.textContent = "—";
-    return;
-  }
-  els.cameraNoun.textContent = `${active.name}`;
-  els.cameraCount.textContent = `${active.physical_count}`;
+  const active = activeId
+    ? state.catalog.find((item) => item.item_id === activeId)
+    : null;
+  els.cameraCount.textContent = active ? `${active.physical_count}` : "";
 }
 
 if (els.cameraFeed) {
