@@ -1,20 +1,19 @@
 """Domain services — the business logic layer.
 
-Phase 1 ships only the Protocol classes (the shapes that other
-layers depend on) and an in-memory ``_stubs`` module that
-implements every Protocol with dict-backed fakes. The parallel
-"Track A" PR replaces those fakes with real implementations
-backed by the event store and projections.
+``make_services()`` is the single factory the FastAPI app calls.
+By default it returns the real (event-store-backed) bundle. Set
+``FRUITMARKET_USE_STUBS=1`` in the environment to fall back to the
+in-memory ``_stubs`` bundle — useful for contract tests that don't
+want SQLite touching disk.
 
-``make_services()`` is the single factory the FastAPI app should
-call. After Track A merges, this function returns the real
-implementations; in the meantime it returns the stubs.
-
-This means Codex's Track B can build against ``make_services()``
-today without waiting for Track A.
+The Protocol classes are the contract both implementations satisfy;
+nothing else in the codebase should care which one is wired up.
 """
 
+import os
+
 from fruit_market.services import _stubs
+from fruit_market.services.factory import make_real_services
 from fruit_market.services.protocols import (
     CatalogService,
     InventoryService,
@@ -33,11 +32,14 @@ from fruit_market.services.protocols import (
 def make_services() -> Services:
     """Factory for the service bundle.
 
-    Phase 1: returns the in-memory stubs. After Track A merges, the
-    real implementations replace this body. Callers don't change.
+    Returns the real, event-store-backed bundle by default. Set
+    ``FRUITMARKET_USE_STUBS=1`` to fall back to in-memory stubs —
+    handy for tests that don't want SQLite I/O.
     """
 
-    return _stubs.make_stub_services()
+    if os.environ.get("FRUITMARKET_USE_STUBS") == "1":
+        return _stubs.make_stub_services()
+    return make_real_services()
 
 
 __all__ = [
