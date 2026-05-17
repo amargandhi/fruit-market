@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -24,10 +25,12 @@ if TYPE_CHECKING:
     from fruit_market.api.schemas import AgentPhoneWebhookEnvelope
     from fruit_market.services.protocols import Services
 
+logger = logging.getLogger(__name__)
 ToolCallable = Callable[..., dict[str, object] | None]
 GeminiThinkingLevel = Literal["minimal", "low", "medium", "high"]
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GEMINI_THINKING_LEVEL: GeminiThinkingLevel = "low"
+DEFAULT_GEMINI_MAX_REMOTE_CALLS = 6
 GEMINI_THINKING_LEVELS: tuple[GeminiThinkingLevel, ...] = (
     "minimal",
     "low",
@@ -44,29 +47,42 @@ def handle_agentphone_message(
     transcript = _message_text(envelope, raw_payload)
     if not transcript:
         return "Thanks for calling Fruit Market. How can I help?"
-    return generate_reply(transcript, services)
+    return generate_reply(transcript, services, caller_phone=_caller_phone(envelope, raw_payload))
 
 
-def generate_reply(transcript: str, services: Services) -> str:
+def generate_reply(
+    transcript: str,
+    services: Services,
+    caller_phone: str | None = None,
+) -> str:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if api_key and "REPLACE_ME" not in api_key:
         try:
-            reply = _generate_with_gemini(transcript, services, api_key)
+            reply = _generate_with_gemini(transcript, services, api_key, caller_phone)
         except Exception:
+            logger.exception("Gemini generation failed; using local fallback reply")
             reply = ""
         if reply:
             return reply
     return _fallback_reply(services)
 
 
-def _generate_with_gemini(transcript: str, services: Services, api_key: str) -> str:
+def _generate_with_gemini(
+    transcript: str,
+    services: Services,
+    api_key: str,
+    caller_phone: str | None = None,
+) -> str:
     genai = importlib.import_module("google.genai")
     genai_types = importlib.import_module("google.genai.types")
     client = genai.Client(api_key=api_key)
     model = _gemini_model()
     config_kwargs: dict[str, object] = {
-        "system_instruction": prompts.system_prompt(services),
-        "tools": _tool_callables(services),
+        "system_instruction": prompts.system_prompt(services, caller_phone=caller_phone),
+        "tools": _tool_callables(services, caller_phone=caller_phone),
+        "automatic_function_calling": genai_types.AutomaticFunctionCallingConfig(
+            maximum_remote_calls=_gemini_max_remote_calls()
+        ),
     }
     if model.startswith("gemini-3"):
         config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
@@ -96,7 +112,10 @@ def _fallback_reply(services: Services) -> str:
     )
 
 
-def _tool_callables(services: Services) -> list[ToolCallable]:
+def _tool_callables(
+    services: Services,
+    caller_phone: str | None = None,
+) -> list[ToolCallable]:
     def resolve_item(query: str) -> dict[str, object] | None:
         """Find the catalog item that matches a customer's wording.
 
@@ -135,21 +154,27 @@ def _tool_callables(services: Services) -> list[ToolCallable]:
             QuoteOrderInput(item_id=item_id, qty=qty),
         ).model_dump(mode="json")
 
-    def reserve_order(item_id: str, qty: int, customer_phone: str) -> dict[str, object]:
+    def reserve_order(
+        item_id: str,
+        qty: int,
+        customer_phone: str = "",
+    ) -> dict[str, object]:
         """Reserve inventory for a customer before payment.
 
         Args:
             item_id: Catalog item id returned by resolve_item or list_items.
             qty: Positive quantity to reserve.
-            customer_phone: Customer phone number in E.164 format.
+            customer_phone: Customer phone number in E.164 format. Omit this when the
+                current caller phone should be used.
 
         Returns:
             Reserved order id and total amount in cents.
         """
 
+        phone = customer_phone or caller_phone or ""
         return tools.reserve_order(
             services,
-            ReserveOrderInput(item_id=item_id, qty=qty, customer_phone=customer_phone),
+            ReserveOrderInput(item_id=item_id, qty=qty, customer_phone=phone),
         ).model_dump(mode="json")
 
     def create_checkout(order_id: str) -> dict[str, object]:
@@ -191,36 +216,40 @@ def _tool_callables(services: Services) -> list[ToolCallable]:
 
         return tools.get_venue_info(services, GetVenueInfoInput()).model_dump(mode="json")
 
-    def send_sms(to_phone: str, body: str) -> dict[str, object]:
+    def send_sms(to_phone: str = "", body: str = "") -> dict[str, object]:
         """Send an SMS follow-up to the customer.
 
         Args:
-            to_phone: Destination phone number in E.164 format.
+            to_phone: Destination phone number in E.164 format. Omit this when the
+                current caller phone should be used.
             body: Message body to send.
 
         Returns:
             Provider message id.
         """
 
+        phone = to_phone or caller_phone or ""
         return tools.send_sms(
             services,
-            SendSmsInput(to_phone=to_phone, body=body),
+            SendSmsInput(to_phone=phone, body=body),
         ).model_dump(mode="json")
 
-    def send_imessage(to_phone: str, body: str) -> dict[str, object]:
+    def send_imessage(to_phone: str = "", body: str = "") -> dict[str, object]:
         """Send an iMessage follow-up to the customer.
 
         Args:
-            to_phone: Destination phone number in E.164 format.
+            to_phone: Destination phone number in E.164 format. Omit this when the
+                current caller phone should be used.
             body: Message body to send.
 
         Returns:
             Provider message id.
         """
 
+        phone = to_phone or caller_phone or ""
         return tools.send_imessage(
             services,
-            SendImessageInput(to_phone=to_phone, body=body),
+            SendImessageInput(to_phone=phone, body=body),
         ).model_dump(mode="json")
 
     return cast(
@@ -252,6 +281,17 @@ def _message_text(envelope: AgentPhoneWebhookEnvelope, raw_payload: dict[str, An
     return ""
 
 
+def _caller_phone(envelope: AgentPhoneWebhookEnvelope, raw_payload: dict[str, Any]) -> str | None:
+    if envelope.call and envelope.call.from_phone:
+        return envelope.call.from_phone
+    data = raw_payload.get("data", {})
+    if isinstance(data, dict):
+        from_phone = data.get("from") or data.get("from_phone")
+        if isinstance(from_phone, str) and from_phone:
+            return from_phone
+    return None
+
+
 def _gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
 
@@ -261,3 +301,16 @@ def _gemini_thinking_level() -> GeminiThinkingLevel:
     if level in GEMINI_THINKING_LEVELS:
         return level
     return DEFAULT_GEMINI_THINKING_LEVEL
+
+
+def _gemini_max_remote_calls() -> int:
+    raw_value = os.environ.get("GEMINI_MAX_REMOTE_CALLS", "").strip()
+    if not raw_value:
+        return DEFAULT_GEMINI_MAX_REMOTE_CALLS
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_GEMINI_MAX_REMOTE_CALLS
+    if value < 1:
+        return DEFAULT_GEMINI_MAX_REMOTE_CALLS
+    return value
