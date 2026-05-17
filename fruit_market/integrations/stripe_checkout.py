@@ -47,7 +47,7 @@ def create(
     return session
 
 
-def verify_webhook(headers: dict[str, str], body: bytes) -> stripe.Event:
+def verify_webhook(headers: Mapping[str, str], body: bytes) -> stripe.Event:
     signature = _header(headers, "Stripe-Signature")
     if not signature:
         raise ValueError("missing Stripe-Signature")
@@ -72,7 +72,7 @@ def event_data_object(event: stripe.Event) -> dict[str, Any]:
     return obj if isinstance(obj, dict) else {}
 
 
-def _header(headers: dict[str, str], name: str) -> str | None:
+def _header(headers: Mapping[str, str], name: str) -> str | None:
     for key, value in headers.items():
         if key.lower() == name.lower():
             return value
