@@ -45,6 +45,59 @@ _DEFAULT_FRUIT: list[tuple[str, float, int]] = [
 ]
 
 
+# ─── Boot-time env audit (loud warnings, never fatal) ─────────────
+#
+# Each tuple is (env_var, default_value_for_unset_test, demo_step_description).
+# At boot we walk this list and print one line per knob that's
+# missing or misconfigured, so the operator catches it BEFORE the
+# first call lands instead of after step 13 silently no-ops.
+_REQUIRED_ENV_SURVEY: list[tuple[str, str, str]] = [
+    ("GEMINI_API_KEY",       "REPLACE_ME", "phone-agent brain (step 7)"),
+    ("AGENTPHONE_API_KEY",   "",           "AgentPhone HTTP calls (steps 13, 25)"),
+    ("AGENTPHONE_WEBHOOK_SECRET", "",      "verify /webhooks/phone signatures (step 6)"),
+    ("AGENTPHONE_SEND_MODE", "",           "must be 'live' for steps 13, 25"),
+    ("AGENTMAIL_API_KEY",    "",           "operator + customer email (steps 17, 18, 24)"),
+    ("AGENTMAIL_ENABLED",    "0",          "must be '1' for steps 17, 18"),
+    ("STRIPE_API_KEY",       "",           "Stripe Checkout sessions (step 12)"),
+    ("STRIPE_WEBHOOK_SECRET","",           "verify /webhooks/stripe (step 15)"),
+    ("OPERATOR_EMAIL",       "",           "Stripe paid-order email recipient (step 18)"),
+    ("OPERATOR_PHONE",       "",           "restock SMS recipient (step 25)"),
+]
+
+
+def _audit_env() -> None:
+    """Print a boot banner showing which demo-chain steps are armed.
+
+    Never raises — missing config is treated as "that step will
+    no-op at runtime"; the rest of the system still boots so the
+    operator can see what's wrong and fix the env.
+    """
+
+    missing: list[tuple[str, str]] = []
+    armed: list[str] = []
+    for env_var, sentinel, description in _REQUIRED_ENV_SURVEY:
+        value = os.environ.get(env_var, "").strip()
+        if not value or value == sentinel:
+            missing.append((env_var, description))
+        else:
+            armed.append(env_var)
+
+    if missing:
+        logger.warning("─── env audit: %d step(s) will no-op ───", len(missing))
+        for env_var, description in missing:
+            logger.warning("  %-32s — %s", env_var, description)
+        logger.warning(
+            "─── set the above in .env to arm the full demo chain ───",
+        )
+    if armed:
+        logger.info(
+            "env audit: %d/%d sponsor knobs configured (%s)",
+            len(armed),
+            len(_REQUIRED_ENV_SURVEY),
+            ", ".join(sorted(armed)),
+        )
+
+
 def _ensure_default_fruit(services: Services) -> None:
     """Idempotently seed apple + banana into the catalog at boot.
 
@@ -97,6 +150,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.event_store = event_store
     app.state.restock = None
     app.state.vision = None
+    # Fresh per-app Pico debounce ledger so concurrent processes
+    # (or back-to-back TestClient boots in CI) don't inherit stale
+    # press timestamps from a sibling app instance.
+    app.state.pico_last_press = {}
+
+    # Print which sponsor knobs are armed before any traffic
+    # hits the app, so the operator sees missing config in plain
+    # English rather than as silent runtime no-ops.
+    _audit_env()
 
     # Seed apple + banana so the watcher has something to count
     # from boot — no manual teach required. Idempotent.

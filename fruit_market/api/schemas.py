@@ -122,6 +122,12 @@ class RestockView(_Schema):
     email_failure_reason: str | None = None
     eta_iso: str | None = None
     failure_reason: str | None = None
+    # Operator-visible expiry deadline. When this fields is set,
+    # the Pico bridge can show a colour-shifted supply_buy LED
+    # (green → amber → red) as the proposal nears expiry, and the
+    # kiosk can show a countdown. ISO-8601 UTC.
+    expires_at_iso: str | None = None
+    seconds_until_expiry: int | None = None
 
 
 class SystemHealth(_Schema):

@@ -12,11 +12,11 @@ import threading
 import time
 
 from fruit_market.vision.model import (
+    _LOC_TOKEN_RE,
     COUNT_PROMPT,
     DETECT_PROMPT,
     PaliGemmaCounter,
     _coerce_text,
-    _LOC_TOKEN_RE,
 )
 
 

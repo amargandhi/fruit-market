@@ -156,10 +156,15 @@ class VisionWatcher:
         # every ``heartbeat_seconds`` so a perfectly-still scene doesn't
         # show a stale physical_count forever (and so we notice if the
         # camera silently froze).
+        # 5 s heartbeat (was 30 s) so a frozen camera daemon shows
+        # up as "stale count" within a single demo step instead of
+        # hiding for half a minute. With a 0.5 s poll + 3% motion
+        # threshold the heartbeat almost never fires for normal
+        # use — it's a safety net for static scenes / silent freezes.
         self._heartbeat_seconds = (
             heartbeat_seconds
             if heartbeat_seconds is not None
-            else float(os.environ.get("FM_VISION_HEARTBEAT_SECONDS", "30"))
+            else float(os.environ.get("FM_VISION_HEARTBEAT_SECONDS", "5"))
         )
         self._previous_frame: bytes | None = None
         # Freshest snapshot for the kiosk's video feed. Distinct

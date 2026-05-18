@@ -107,6 +107,54 @@ def pack_order(request: Request, order_id: str) -> PackOrderResponse:
     return PackOrderResponse(order_id=order.id, status=order.status)
 
 
+@router.post("/orders/{order_id}/cancel", response_model=PackOrderResponse)
+def cancel_order(request: Request, order_id: str) -> PackOrderResponse:
+    """Cancel any order (reserved OR paid). Refunds aren't issued
+    here — the operator handles Stripe refunds out-of-band; this
+    just unblocks the order from the kiosk's "to-pack" queue and
+    releases held stock back to inventory."""
+
+    services = get_services(request)
+    order = services.orders.get(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="unknown order")
+    services.orders.cancel(order_id, "operator")
+    after = services.orders.get(order_id)
+    if after is None:
+        raise HTTPException(status_code=404, detail="unknown order")
+    return PackOrderResponse(order_id=after.id, status=after.status)
+
+
+@router.delete("/teach/{item_id}", response_model=SwitchActiveItemResponse)
+def delete_taught_item(request: Request, item_id: str) -> SwitchActiveItemResponse:
+    """Soft-delete a taught item by zeroing its stock + marking it
+    inactive. The event store keeps a full audit trail (no actual
+    delete), but the kiosk + phone agent stop offering it. Useful
+    when the operator mistypes a teach and needs to clean up
+    without restarting the whole event log."""
+
+    services = get_services(request)
+    item = services.catalog.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="unknown item")
+    services.inventory.reconcile_physical_count(
+        item_id=item_id,
+        count=0,
+        source="manual",
+        confidence=1.0,
+    )
+    # If this was the active item, clear it so the kiosk doesn't
+    # keep showing a zeroed-out card as "active".
+    active = services.catalog.get_active_item()
+    if active is not None and active.id == item_id:
+        # Pick the next still-stocked item as active, else None.
+        for candidate in services.catalog.list_items():
+            if candidate.id != item_id and candidate.physical_count > 0:
+                services.catalog.set_active_item(candidate.id)
+                break
+    return SwitchActiveItemResponse(item_id=item_id)
+
+
 @router.post("/active-item", response_model=SwitchActiveItemResponse)
 def switch_active_item(
     request: Request,
@@ -278,6 +326,45 @@ def demo_active(request: Request) -> DemoStateResponse:
 
 
 # ─── Pico keypad ────────────────────────────────────────────────────
+#
+# Server-side debouncer for noisy serial / fast double-presses.
+# Each action has a min interval between accepted presses; a
+# second press inside the window returns status="debounced" so the
+# bridge logs it without firing a duplicate transaction. Tuned per
+# action: state-mutating actions are protected (1.5 s), idempotent
+# ones (count_now, ready) are not.
+_PICO_DEBOUNCE_SECONDS: dict[str, float] = {
+    "packed":     1.5,
+    "cancel":     1.5,
+    "supply_buy": 2.5,  # money-moving action, extra-conservative
+    "confirm":    1.5,
+}
+
+
+def _pico_should_debounce(request: Request, action: str) -> bool:
+    """Return True if ``action`` was accepted too recently.
+
+    State lives on ``request.app.state.pico_last_press`` so each
+    TestClient (and each long-running process) keeps its own
+    history — the in-memory dict doesn't leak across processes
+    or test runs.
+    """
+
+    window = _PICO_DEBOUNCE_SECONDS.get(action)
+    if window is None or window <= 0:
+        return False
+    import time  # noqa: PLC0415
+
+    last_press: dict[str, float] = getattr(request.app.state, "pico_last_press", None)  # type: ignore[assignment]
+    if last_press is None:
+        last_press = {}
+        request.app.state.pico_last_press = last_press
+    now = time.monotonic()
+    last = last_press.get(action, 0.0)
+    if now - last < window:
+        return True
+    last_press[action] = now
+    return False
 
 
 @router.post("/pico/action", response_model=PicoActionResponse)
@@ -294,6 +381,14 @@ def pico_action(request: Request, payload: PicoActionRequest) -> PicoActionRespo
     services = get_services(request)
     restock = get_restock(request.app)
     action = payload.action
+
+    if _pico_should_debounce(request, action):
+        return PicoActionResponse(
+            ok=True,
+            action=action,
+            status="debounced",
+            detail="ignored — pressed too soon after the previous press",
+        )
 
     if action == "ready":
         # ``ready`` = "I'm done stocking the shelf, take orders now."
@@ -324,10 +419,23 @@ def pico_action(request: Request, payload: PicoActionRequest) -> PicoActionRespo
                 detail=result.detail,
                 proposal_id=result.proposal_id,
             )
-        for order in services.orders.list_active():
+        # Prefer reserved orders (newest first — Pico CANCEL acts on
+        # whatever the operator just looked at on the kiosk). Fall
+        # back to paid orders so the operator can also unblock a
+        # mistaken paid order from the keypad.
+        for order in reversed(services.orders.list_active()):
             if order.status == "reserved":
                 services.orders.cancel(order.id, "operator")
                 return PicoActionResponse(action=action, status="ok", order_id=order.id)
+        for order in reversed(services.orders.list_active()):
+            if order.status == "paid":
+                services.orders.cancel(order.id, "operator")
+                return PicoActionResponse(
+                    action=action,
+                    status="cancelled_paid",
+                    detail="paid order cancelled — refund handled out-of-band",
+                    order_id=order.id,
+                )
         return PicoActionResponse(action=action, status="no_pending")
 
     if action == "count_now":
@@ -418,6 +526,23 @@ def _restock_view(restock: RestockRuntime | None) -> RestockView | None:
     record = restock.projection.current_active()
     if record is None:
         return None
+    # Compute a seconds-until-expiry counter so the kiosk can show
+    # "Approve within 1m 32s" and the Pico can colour-shift the
+    # supply_buy LED as the deadline approaches.
+    expires_at_iso = getattr(record, "expires_at_iso", None) or None
+    seconds_until_expiry: int | None = None
+    if expires_at_iso:
+        try:
+            from datetime import UTC, datetime  # noqa: PLC0415
+
+            expires_at = datetime.fromisoformat(
+                expires_at_iso.replace("Z", "+00:00")
+            )
+            seconds_until_expiry = max(
+                0, int((expires_at - datetime.now(tz=UTC)).total_seconds())
+            )
+        except (ValueError, AttributeError):
+            seconds_until_expiry = None
     return RestockView(
         proposal_id=record.proposal_id,
         item_id=record.item_id,
@@ -434,6 +559,8 @@ def _restock_view(restock: RestockRuntime | None) -> RestockView | None:
         email_failure_reason=record.email_failure_reason,
         eta_iso=record.eta_iso,
         failure_reason=record.failure_reason,
+        expires_at_iso=expires_at_iso,
+        seconds_until_expiry=seconds_until_expiry,
     )
 
 
