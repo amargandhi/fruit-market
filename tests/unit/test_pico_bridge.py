@@ -48,13 +48,56 @@ def test_api_state_to_payload_tolerates_missing_fields() -> None:
     payload = api_state_to_payload({})  # nothing at all
     assert payload.active_item == ""
     assert payload.active_count == 0
+    # ``ready`` defaults to attention=True when demo_active isn't
+    # set (the operator hasn't pressed READY yet). The other five
+    # action keys default to attention=False because nothing is
+    # pending.
     assert payload.attention == {
-        "confirm": False,
+        "ready": True,
         "packed": False,
         "cancel": False,
         "supply_buy": False,
+        "count_now": False,
+        "confirm": False,
     }
     assert payload.health == {"camera": "unknown", "model": "unknown", "phone": "unknown"}
+    # New fields default safely.
+    assert payload.order_status == ""
+    assert payload.payment_pending is False
+    assert payload.call_active is False
+
+
+def test_api_state_to_payload_reflects_demo_active_for_ready_attention() -> None:
+    """Once the operator presses READY, demo_active flips True and
+    the READY key should stop demanding attention."""
+
+    payload = api_state_to_payload({"demo_active": True})
+    assert payload.attention["ready"] is False
+
+
+def test_api_state_to_payload_maps_order_status() -> None:
+    """A paid order should drive order_status=paid + clear
+    payment_pending (which only fires for unpaid reservations)."""
+
+    payload = api_state_to_payload({
+        "orders": [
+            {"order_id": "o1", "status": "paid", "item_id": "i", "item_name": "a",
+             "qty": 1, "total_cents": 100, "customer_phone": "+1"},
+        ],
+    })
+    assert payload.order_status == "paid"
+    assert payload.payment_pending is False
+
+
+def test_api_state_to_payload_flags_payment_pending_on_reservation() -> None:
+    payload = api_state_to_payload({
+        "orders": [
+            {"order_id": "o1", "status": "reserved", "item_id": "i", "item_name": "a",
+             "qty": 1, "total_cents": 100, "customer_phone": "+1"},
+        ],
+    })
+    assert payload.payment_pending is True
+    assert payload.order_status == "reserved"
 
 
 def test_api_state_to_payload_maps_pending_to_attention() -> None:

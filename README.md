@@ -88,6 +88,58 @@ restock:
     the Pico restock approval button, the backend approves the locked
     PaySponge plan and performs the paid supplier request.
 
+## Pico keypad layout
+
+The Pimoroni 4×4 RGB keypad is the operator's one-touch dashboard.
+Top row is the four demo-critical actions; the other 12 cells are
+read-only status indicators that mirror the kiosk so the operator
+can run the stall without looking at a screen.
+
+```
++-------------+-------------+-------------+-----------------+
+| 0 READY     | 1 PACKED    | 2 CANCEL    | 3 SUPPLY_BUY    |
+|   green     |   amber     |   red       |   cyan          |
++-------------+-------------+-------------+-----------------+
+| 4 call act. | 5 payment   | 6 COUNT_NOW | 7 CONFIRM       |
+|   blue      |   gold      |   violet    |   light green   |
++-------------+-------------+-------------+-----------------+
+| 8 apples    | 9 bananas   |10 reserved  |11 paid/packed   |
+|   red       |   yellow    |   purple    |   green         |
++-------------+-------------+-------------+-----------------+
+|12 camera    |13 model     |14 phone     |15 error         |
+|   blue      |   violet    |   magenta   |   red           |
++-------------+-------------+-------------+-----------------+
+```
+
+**Row 0 — the four buttons the operator presses during a demo:**
+
+| Key | Action | Press when |
+|---|---|---|
+| **0 READY** | Open the store for phone orders | Done stocking the shelf; ready to take calls. Pill in kiosk flips amber → green. |
+| **1 PACKED** | Pack the next paid order | A paid order shows on the kiosk and you've physically set the fruit aside. Order moves Paid → Packed. |
+| **2 CANCEL** | Cancel reservation OR restock | An order is stuck or a restock needs rejecting. Stock returns to inventory. |
+| **3 SUPPLY_BUY** | Approve restock payment | The cyan key is breathing fast amber — a supplier basket is staged, press to pay PaySponge. |
+
+**Row 1 — secondary actions + status indicators (no normal press needed):**
+- **4 (visual)** blue breathe = phone call in progress
+- **5 (visual)** gold breathe = customer mid-checkout, payment pending
+- **6 COUNT_NOW** — force a vision recount past the motion gate (diagnostic)
+- **7 CONFIRM** — confirm a pending teach proposal (rare in the auto-seeded demo)
+
+**Row 2 — at-a-glance item + order status:**
+- 8 / 9 breathe when that fruit is the active item
+- 10 (purple breathe) when an order is reserved waiting for Stripe Checkout
+- 11 (green breathe → solid) when an order is paid → packed
+
+**Row 3 — system health:**
+- 12 / 13 / 14: bright = `ok`, dim = `mock`, amber breathe = `warmup`, red blink = `error`
+- 15: blinks red/white when the bridge reports an error condition
+
+Animations follow a layered paint pipeline (legend → attention →
+item → order → workflow → restock phase → health → flashes →
+press) so the keys never get "stuck" — each frame is a complete
+re-render from the most recent bridge payload.
+
 ## Sponsor and model map
 
 | Sponsor / system | Where it appears in the demo |

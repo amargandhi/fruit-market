@@ -57,11 +57,26 @@ class PicoStatePayload:
     bridge SHOULD push on every state change AND on a heartbeat
     (~1 Hz) so a freshly-booted Pico catches up without needing
     a special handshake.
+
+    Fields map directly onto the firmware's per-key paint
+    pipeline (see ``apps/pico/main.py`` for the per-layer paint
+    functions):
+      * ``active_item`` → glows the matching row-2 fruit cell.
+      * ``order_status`` → row-2 cells 10 (reservation) + 11 (paid).
+      * ``call_active`` / ``payment_pending`` → row-1 indicators.
+      * ``restock_status`` → row-0 SUPPLY_BUY animation phase.
+      * ``attention`` → which row-0 keys breathe to demand
+        operator focus.
+      * ``health`` → row-3 subsystem indicators.
+      * ``error_message`` → row-3 ERROR strobe.
     """
 
     active_item: str = ""
     active_count: int = 0
     active_low: bool = False
+    order_status: str = ""           # "" | reserved | paid | packed | cancelled
+    call_active: bool = False
+    payment_pending: bool = False
     restock_status: str = ""
     attention: dict[str, bool] = field(default_factory=dict)
     health: dict[str, str] = field(default_factory=dict)
@@ -83,6 +98,9 @@ class PicoStatePayload:
             "active_item": self.active_item or "",
             "active_count": max(0, int(self.active_count)),
             "active_low": bool(self.active_low),
+            "order_status": str(self.order_status or ""),
+            "call_active": bool(self.call_active),
+            "payment_pending": bool(self.payment_pending),
             "restock_status": str(self.restock_status or ""),
             "attention": attention,
             "health": health,

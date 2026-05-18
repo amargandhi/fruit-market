@@ -187,9 +187,20 @@ class ApiClient:
 def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
     """Translate the API's snapshot into the firmware's wire shape.
 
-    The API surface is owned by another track and may evolve; this
-    function is intentionally forgiving — missing fields collapse
-    to sensible defaults rather than raising.
+    Field mapping (kiosk → keypad):
+      * ``catalog[active_item_id]`` → ``active_item`` + count + low flag.
+      * most-recent active ``orders[*]`` status → ``order_status``
+        (drives the row-2 reservation + paid/packed indicators).
+      * ``orders[*].status == "reserved"`` → ``payment_pending``
+        (drives the row-1 PAYMENT gold breathe).
+      * ``pending.*`` → ``attention.*`` (which row-0 keys glow).
+      * ``restock.status`` → ``restock_status`` (drives SUPPLY_BUY's
+        per-phase animation).
+      * ``health.*`` → row-3 subsystem cells.
+
+    Forgiving on missing fields: anything absent collapses to a
+    safe default rather than raising. The API surface is owned by
+    another track and may evolve.
     """
 
     catalog = state.get("catalog") or []
@@ -207,16 +218,40 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
                 active_low = bool(item.get("is_low", False))
                 break
 
+    # Pick the most recent non-terminal order to drive the row-2
+    # status indicators. Prefer paid > reserved > packed (packed
+    # is terminal but still surfaced briefly via solid green).
+    orders = state.get("orders") or []
+    order_status = ""
+    payment_pending = False
+    if isinstance(orders, list):
+        statuses = [
+            str(o.get("status", ""))
+            for o in orders
+            if isinstance(o, dict)
+        ]
+        # Priority: paid > reserved > packed (most demo-relevant first).
+        for preferred in ("paid", "reserved", "packed"):
+            if preferred in statuses:
+                order_status = preferred
+                break
+        payment_pending = "reserved" in statuses
+
     pending = state.get("pending") or {}
     pending_dict = pending if isinstance(pending, dict) else {}
     restock = state.get("restock") or {}
     restock_dict = restock if isinstance(restock, dict) else {}
     supply_buy_pending = bool(pending_dict.get("supply_buy"))
+    # demo_active flips on operator's READY press; light READY
+    # only when the operator HASN'T pressed it yet.
+    demo_active = bool(state.get("demo_active"))
     attention = {
-        "confirm": bool(pending_dict.get("teach_proposal")),
+        "ready": not demo_active,
         "packed": bool(pending_dict.get("paid_order")),
         "cancel": bool(pending_dict.get("reservation")) or supply_buy_pending,
         "supply_buy": supply_buy_pending,
+        "count_now": False,
+        "confirm": bool(pending_dict.get("teach_proposal")),
     }
 
     health = state.get("health") or {}
@@ -233,6 +268,12 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
         active_item=active_name,
         active_count=active_count,
         active_low=active_low,
+        order_status=order_status,
+        # call_active stays False until we wire AgentPhone live-call
+        # tracking through /api/state; not in scope for the kiosk
+        # surface today.
+        call_active=False,
+        payment_pending=payment_pending,
         restock_status=str(restock_dict.get("status") or ""),
         attention=attention,
         health={
