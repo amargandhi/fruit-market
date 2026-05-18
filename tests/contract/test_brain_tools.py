@@ -65,6 +65,66 @@ def test_create_checkout_uses_order_metadata(monkeypatch, stub_services) -> None
     assert seen["unit_amount_cents"] == 250
 
 
+def test_create_checkout_texts_link_in_live_mode(  # type: ignore[no-untyped-def]
+    monkeypatch, stub_services,
+) -> None:
+    """Step 13 must be deterministic — don't trust Gemini to call
+    send_sms on its own. ``create_checkout`` itself must text the
+    Stripe link when AGENTPHONE_SEND_MODE=live."""
+
+    proposal = stub_services.teach.propose("These are pears, $2.00, 4 of them")
+    item = stub_services.teach.confirm(proposal.id)
+    order = stub_services.orders.reserve(item.id, 1, "+15551234567")
+
+    monkeypatch.setenv("AGENTPHONE_SEND_MODE", "live")
+    monkeypatch.setattr(
+        tools.stripe_checkout, "create",
+        lambda **_kwargs: {"url": "https://checkout.test/session"},
+    )
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        tools.agentphone, "send_sms",
+        lambda to, body: (sent.append((to, body)), "msg_test")[1],
+    )
+
+    tools.create_checkout(stub_services, CreateCheckoutInput(order_id=order.id))
+
+    assert len(sent) == 1
+    to, body = sent[0]
+    assert to == "+15551234567"
+    assert "https://checkout.test/session" in body
+    assert "pear" in body.lower()
+
+
+def test_create_checkout_skips_sms_in_mock_mode(  # type: ignore[no-untyped-def]
+    monkeypatch, stub_services,
+) -> None:
+    """Without live send mode, no real SMS fires — but checkout
+    still succeeds."""
+
+    proposal = stub_services.teach.propose("These are grapes, $3.00, 2 of them")
+    item = stub_services.teach.confirm(proposal.id)
+    order = stub_services.orders.reserve(item.id, 1, "+15551234567")
+
+    monkeypatch.delenv("AGENTPHONE_SEND_MODE", raising=False)
+    monkeypatch.setattr(
+        tools.stripe_checkout, "create",
+        lambda **_kwargs: {"url": "https://checkout.test/x"},
+    )
+    fired: list[object] = []
+    monkeypatch.setattr(
+        tools.agentphone, "send_sms",
+        lambda *args, **kwargs: fired.append((args, kwargs)) or "msg_should_not_fire",
+    )
+
+    checkout = tools.create_checkout(
+        stub_services, CreateCheckoutInput(order_id=order.id)
+    )
+
+    assert checkout.checkout_url == "https://checkout.test/x"
+    assert fired == []
+
+
 def test_send_sms_tool_uses_agentphone(monkeypatch, stub_services) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setattr(tools.agentphone, "send_sms", lambda to, body: f"msg:{to}:{body}")
 
