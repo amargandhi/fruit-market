@@ -325,6 +325,49 @@ def demo_active(request: Request) -> DemoStateResponse:
     )
 
 
+@router.post("/demo/seed-paid-order", response_model=OrderView)
+def demo_seed_paid_order(
+    request: Request,
+    item_id: str | None = None,
+    qty: int = 2,
+) -> OrderView:
+    """Manufacture a fully-paid order on the spot.
+
+    For rehearsals + Pico-key smoke tests where you want to prove
+    PACKED / CANCEL react to real state without making a Stripe
+    call. Picks the first taught item if ``item_id`` is unset.
+    Force-bumps inventory so the reservation succeeds even if
+    the watcher has the count at zero. Marks the order paid with
+    a synthetic ``cs_demo_seed_*`` Stripe session id.
+
+    Idempotent: each call creates a new order; existing orders
+    are untouched.
+    """
+
+    import uuid  # noqa: PLC0415
+
+    services = get_services(request)
+    item = services.catalog.get_item(item_id) if item_id else None
+    if item is None:
+        items = services.catalog.list_items()
+        if not items:
+            raise HTTPException(status_code=400, detail="no taught items")
+        item = items[0]
+    # Make sure there's enough stock for the reservation to land.
+    if item.physical_count < qty:
+        services.inventory.reconcile_physical_count(
+            item_id=item.id,
+            count=max(qty + 1, 5),
+            source="manual",
+            confidence=1.0,
+        )
+    order = services.orders.reserve(item.id, qty, "+15551234567")
+    services.orders.mark_paid(order.id, f"cs_demo_seed_{uuid.uuid4().hex[:8]}")
+    after = services.orders.get(order.id)
+    assert after is not None
+    return _order_view(services, after)
+
+
 # ─── Pico keypad ────────────────────────────────────────────────────
 #
 # Server-side debouncer for noisy serial / fast double-presses.
