@@ -6,7 +6,7 @@ grabbed it" is the caller's concern — we raise
 :class:`CameraUnavailableError` and let the watcher decide whether
 to retry or escalate.
 
-Two backends:
+Backends:
 
 * :class:`Cv2Camera` — opencv-python + AVFoundation. Works when the
   Python process's parent app has been granted camera permission in
@@ -17,10 +17,14 @@ Two backends:
   has its own TCC entry, so this works even when Python's parent
   process is sandboxed. Selects the device by name substring via
   ``FM_CAMERA_DEVICE`` (default "C920").
+* :class:`DaemonCamera` — reads frames from the long-running
+  ``FruitMarketCamera.app --daemon`` HTTP endpoint. This is the
+  default path when the daemon is already running.
 
 The :func:`open_camera` factory picks one based on
-``FM_CAMERA_BACKEND``: ``cv2`` (default), ``broker``, or ``auto``
-(try cv2 first, fall back to broker on failure).
+``FM_CAMERA_BACKEND``: ``auto`` (default), ``daemon``, ``cv2``,
+``broker``, or ``file``. Auto probes daemon first, then falls back to
+cv2 and broker.
 """
 
 from __future__ import annotations
@@ -33,6 +37,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import cv2
 
 
@@ -371,18 +377,18 @@ def open_camera() -> CameraBackend:
     """Pick a camera backend based on ``FM_CAMERA_BACKEND``.
 
     Values:
+      * ``auto``   — prefer daemon, then cv2, then broker.
+      * ``daemon`` — use :class:`DaemonCamera` (continuous FruitMarketCamera.app).
       * ``cv2``    — use :class:`Cv2Camera` only; raise if it fails.
       * ``broker`` — one-shot subprocess to :class:`BrokerCamera`.
       * ``file``   — use :class:`FileCamera` (pinned JPEG, TCC-free).
-      * ``daemon`` — use :class:`DaemonCamera` (continuous FruitMarketCamera.app).
-      * ``auto``   — try cv2, fall back to broker on failure.
 
-    Default is ``cv2`` to preserve the original behavior; flip to
-    ``daemon`` once you've started ``FruitMarketCamera.app --daemon``
-    for the smoothest live-feed experience.
+    Default is ``auto`` so the kiosk automatically reuses a running
+    ``FruitMarketCamera.app --daemon`` process. Explicit env settings
+    still select exactly the requested backend.
     """
 
-    backend = os.environ.get("FM_CAMERA_BACKEND", "cv2").lower()
+    backend = os.environ.get("FM_CAMERA_BACKEND", "auto").lower()
     if backend == "broker":
         return BrokerCamera()
     if backend == "file":
@@ -390,12 +396,34 @@ def open_camera() -> CameraBackend:
     if backend == "daemon":
         return DaemonCamera()
     if backend == "auto":
-        cam: CameraBackend = Cv2Camera()
-        try:
-            # Probe one frame so we know cv2 actually works.
-            _ = cam.snapshot()
-            return cam
-        except CameraUnavailableError:
-            cam.close()
-            return BrokerCamera()
+        return _open_auto_camera()
     return Cv2Camera()
+
+
+def _daemon_camera_for_auto() -> CameraBackend:
+    timeout = float(os.environ.get("FM_CAMERA_AUTO_DAEMON_TIMEOUT", "0.25"))
+    return DaemonCamera(timeout_seconds=timeout)
+
+
+def _open_auto_camera() -> CameraBackend:
+    candidates: tuple[tuple[str, Callable[[], CameraBackend]], ...] = (
+        ("daemon", _daemon_camera_for_auto),
+        ("cv2", Cv2Camera),
+        ("broker", BrokerCamera),
+    )
+    errors: list[str] = []
+    for name, factory in candidates:
+        camera: CameraBackend | None = None
+        try:
+            camera = factory()
+            # Probe one frame so the FastAPI app does not boot with a
+            # backend that cannot feed the web cache.
+            _ = camera.snapshot()
+            return camera
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: {exc}")
+            if camera is not None:
+                camera.close()
+    raise CameraUnavailableError(
+        "no camera backend available (" + "; ".join(errors) + ")"
+    )

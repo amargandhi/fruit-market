@@ -131,7 +131,15 @@ def _try_text_checkout_link(
     qty: int,
     checkout_url: str,
 ) -> None:
-    """Text the Stripe link, no-op cleanly when AgentPhone is mocked."""
+    """SMS the Stripe checkout link to the customer.
+
+    SMS is the only delivery channel — no iMessage fallback. On
+    failure we log loudly (with the upstream error body, the
+    customer phone, and the checkout URL) so the operator can
+    deliver the link manually if needed, but we never raise:
+    the checkout session has already been created and we don't
+    want to undo it because of a delivery glitch.
+    """
 
     send_mode = os.environ.get("AGENTPHONE_SEND_MODE", "").strip().lower()
     if send_mode != "live":
@@ -145,17 +153,21 @@ def _try_text_checkout_link(
             "skip customer SMS — invalid customer_phone %r", to_phone,
         )
         return
+
     qty_label = f"{qty} {item_name}" if qty == 1 else f"{qty} {item_name}s"
     body = (
         f"Fruit Market: tap to pay for your {qty_label} — {checkout_url}"
     )
+
     try:
         agentphone.send_sms(to_phone, body)
-        logger.info("texted Stripe link to %s", to_phone)
-    except Exception:  # noqa: BLE001
-        # Don't fail the checkout creation just because the SMS
-        # failed. The phone agent / kiosk can still speak the link.
-        logger.exception("failed to text Stripe link to %s", to_phone)
+        logger.info("texted Stripe link to %s via SMS", to_phone)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "SMS delivery FAILED to %s — checkout link NOT delivered. "
+            "Upstream: %s. Link: %s",
+            to_phone, str(exc)[:250], checkout_url,
+        )
 
 
 def get_inventory(services: Services, payload: GetInventoryInput) -> GetInventoryOutput:

@@ -264,7 +264,7 @@ angle or lighting demands it.
 | `FM_VISION_HEARTBEAT_SECONDS` | `5` | Force a re-count if nothing's changed for this long (catches frozen cameras). |
 | `FM_VISION_STABILITY_TICKS` | `1` | Require count to repeat for N ticks before committing. >1 = laggy but steadier. |
 | `FM_VISION_MAX_ITEMS` | `4` | Cap items per tick (per-item model calls). |
-| `FM_CAMERA_BACKEND` | `cv2` | Capture backend. Set to `daemon` to read from `FruitMarketCamera.app` (recommended on Mac). |
+| `FM_CAMERA_BACKEND` | `auto` | Capture backend. Auto prefers a running `FruitMarketCamera.app --daemon`, then falls back to `cv2` and `broker`. |
 | `FM_CAMERA_DAEMON_URL` | `http://127.0.0.1:8765` | Daemon endpoint when `FM_CAMERA_BACKEND=daemon`. |
 
 ## Quickstart
@@ -273,7 +273,7 @@ angle or lighting demands it.
 make install         # uv sync; one-time
 make app             # build the camera daemon .app (one-time)
 open apps/fm-camera/FruitMarketCamera.app --args --daemon --device "C920"
-FM_CAMERA_BACKEND=daemon make dev    # uvicorn on :8000
+make dev             # uvicorn on :8000; auto-connects to the daemon
 make pico            # (optional) Pico USB bridge in another terminal
 ```
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -23,6 +25,8 @@ from fruit_market.brain.tool_specs import (
 if TYPE_CHECKING:
     from fruit_market.api.schemas import AgentPhoneWebhookEnvelope
     from fruit_market.services.protocols import Services
+
+logger = logging.getLogger("fm.brain.gemini")
 
 ToolCallable = Callable[..., dict[str, object] | None]
 
@@ -46,19 +50,39 @@ def generate_reply(
     caller_phone: str | None = None,
 ) -> str:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if api_key and "REPLACE_ME" not in api_key:
-        try:
-            reply = _generate_with_gemini(
-                transcript,
-                services,
-                api_key,
-                caller_phone=caller_phone,
-            )
-        except Exception:
-            reply = ""
-        if reply:
-            return reply
-    return _fallback_reply(services)
+    if not api_key or "REPLACE_ME" in api_key:
+        logger.warning("GEMINI_API_KEY not set — returning canned fallback")
+        return _fallback_reply(services)
+
+    logger.info(
+        "brain: transcript=%r caller=%s",
+        transcript[:120], caller_phone or "<unknown>",
+    )
+    started = time.monotonic()
+    try:
+        reply = _generate_with_gemini(
+            transcript,
+            services,
+            api_key,
+            caller_phone=caller_phone,
+        )
+    except Exception:
+        # FULL traceback to the log — previously this was silently
+        # swallowed and the operator saw the canned fallback with
+        # no idea why.
+        logger.exception("brain: gemini call FAILED — falling back")
+        return _fallback_reply(services)
+
+    elapsed = time.monotonic() - started
+    if not reply:
+        logger.warning(
+            "brain: gemini returned empty reply (%.2fs) — falling back",
+            elapsed,
+        )
+        return _fallback_reply(services)
+
+    logger.info("brain: reply=%r (%.2fs)", reply[:200], elapsed)
+    return reply
 
 
 def _generate_with_gemini(
@@ -71,19 +95,15 @@ def _generate_with_gemini(
     genai = importlib.import_module("google.genai")
     genai_types = importlib.import_module("google.genai.types")
     client = genai.Client(api_key=api_key)
+    model = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite")
     config = genai_types.GenerateContentConfig(
         system_instruction=prompts.system_prompt(services),
         tools=_tool_callables(services),
         temperature=0.2,
     )
+    logger.info("brain: calling %s with %d tools", model, 9)
     response = client.models.generate_content(
-        # Gemini 3.1 Flash Lite is the right size for a tool-using
-        # brain when the perception work is already done at the edge
-        # (PaliGemma counts inventory; the phone agent just routes
-        # intent → tool → response). Override via GEMINI_MODEL —
-        # e.g. ``gemini-2.5-flash`` if a particular call needs richer
-        # reasoning at the cost of ~3× latency.
-        model=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+        model=model,
         contents=_model_contents(transcript, caller_phone),
         config=config,
     )

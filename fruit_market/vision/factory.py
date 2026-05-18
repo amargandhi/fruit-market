@@ -12,7 +12,7 @@ all things that live here.
 
 Default behavior:
 
-* Camera backend follows ``FM_CAMERA_BACKEND`` (cv2 / broker / auto).
+* Camera backend follows ``FM_CAMERA_BACKEND`` (auto / daemon / cv2 / broker / file).
 * Model id follows ``FM_VISION_MODEL``, default
   ``mlx-community/paligemma2-3b-mix-224-bf16`` (the bf16 weights
   of PaliGemma 2 mix-224 — bf16 keeps the int8/4bit quantization
