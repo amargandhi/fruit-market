@@ -46,9 +46,8 @@ def test_coerce_text_falls_back_to_str() -> None:
 
 def test_count_prompt_starts_with_image_token() -> None:
     """Regression: PaliGemma 2's processor expects an explicit
-    <image> token. Without it, newer transformers builds drop to a
-    slower path and emit a warning. The prior validated build set
-    this prefix; we match it."""
+    <image> token at the start of the prompt. Without it, newer
+    transformers builds drop to a slower path and emit a warning."""
 
     assert COUNT_PROMPT.startswith("<image>")
     assert DETECT_PROMPT.startswith("<image>")

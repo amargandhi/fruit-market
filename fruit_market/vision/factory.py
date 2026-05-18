@@ -14,8 +14,10 @@ Default behavior:
 
 * Camera backend follows ``FM_CAMERA_BACKEND`` (cv2 / broker / auto).
 * Model id follows ``FM_VISION_MODEL``, default
-  ``mlx-community/paligemma2-3b-mix-224-bf16`` (the bf16 build of
-  the same model used in the prior validated demo).
+  ``mlx-community/paligemma2-3b-mix-224-bf16`` (the bf16 weights
+  of PaliGemma 2 mix-224 — bf16 keeps the int8/4bit quantization
+  loss out of the count task while still fitting comfortably in
+  M-series unified memory).
 * Model warmup is **kicked off as a background task** so the FastAPI
   app starts serving requests without paying the ~4 s weight load on
   the request path. The watcher's first tick may still pay it.
