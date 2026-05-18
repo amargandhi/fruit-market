@@ -1,7 +1,7 @@
 # Fruit Market — developer entry points.
 # All targets assume `uv` is installed (https://docs.astral.sh/uv/).
 
-.PHONY: install install-vision check test check-sponsors dev app restock-supplier restock-tunnel restock-paysponge-probe restock-live-smoke clean
+.PHONY: install install-vision check test check-sponsors dev app pico restock-supplier restock-tunnel restock-paysponge-probe restock-live-smoke clean
 
 # Install runtime + dev deps. Idempotent.
 install:
@@ -35,6 +35,12 @@ dev:
 # change to apps/fm-camera/Sources/, Info.plist, or Resources/.
 app:
 	bash apps/fm-camera/build.sh
+
+# Run the Pico USB bridge sidecar — polls /api/state every 1 s and
+# forwards Pico keypad presses to /api/pico/action. Set PICO_PORT
+# if auto-detect doesn't find the /dev/cu.usbmodem* device.
+pico:
+	uv run python -m fruit_market.hardware.pico_bridge --api http://127.0.0.1:8000
 
 # Run the staging supplier API. Put this behind PaySponge Gateway/x402
 # for the optional restock demo.
