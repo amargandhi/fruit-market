@@ -323,127 +323,76 @@ def paint_legend(ts):
         set_pad(i, COLOR_OFF)
 
 
-def paint_ready_invite(ts):
-    """Pulse the READY key gently until the operator presses it.
+def paint_action_buttons(ts):
+    """Top row -- always solid colors, never breathing.
 
-    Once demo_active is True (operator pressed READY), the attention
-    bit clears and this layer stops painting. Keeps the cold-boot
-    moment from looking like a dead device -- there's exactly one
-    breathing key inviting the first interaction.
+    The four operator buttons are static labels: green = READY,
+    amber = PACKED, red = CANCEL, cyan = SUPPLY_BUY. They tell the
+    operator "these are the four things you can press" at all
+    times -- no animation, no urgency cues. Press feedback is the
+    only thing that overrides this: a 180 ms white flash on the
+    physical press (handled in paint() below).
+
+    All four are painted at the same comfortable brightness
+    (~65%) so the row reads as a single quad-color label on
+    camera, not as four wildly-different intensity blobs.
     """
 
-    attention = state.get("attention", {})
-    if attention.get("ready"):
-        set_pad(KEY_READY, breathe(COLOR_GREEN, scale(COLOR_GREEN, 8), ts, 1400))
-
-
-def paint_attention(ts):
-    """Breathe row-0 action keys that have something pending.
-
-    Only paints keys with a pending state. Keys without pending
-    work stay OFF -- the operator's eye is drawn to the one
-    breathing key instead of scanning a wall of lights.
-
-    READY is handled by paint_ready_invite (slower cadence, calmer
-    invitation). The other actions get a more urgent breathe when
-    they fire.
-    """
-
-    attention = state.get("attention", {})
-    if attention.get("packed"):
-        set_pad(KEY_PACKED, breathe(COLOR_AMBER, scale(COLOR_AMBER, 10), ts, 600))
-    if attention.get("cancel"):
-        set_pad(KEY_CANCEL, breathe(COLOR_RED, scale(COLOR_RED, 10), ts, 600))
-    if attention.get("supply_buy"):
-        # Fastest breathe -- money-moving action, highest urgency.
-        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 380))
+    _ = ts  # unused; included for paint-function signature consistency
+    set_pad(KEY_READY,      scale(COLOR_GREEN, 65))
+    set_pad(KEY_PACKED,     scale(COLOR_AMBER, 65))
+    set_pad(KEY_CANCEL,     scale(COLOR_RED,   65))
+    set_pad(KEY_SUPPLY_BUY, scale(COLOR_CYAN,  65))
 
 
 def paint_status_grid(ts):
     """Paint rows 1-3 as one same-color video status block.
 
-    For recording, the bottom 3x4 grid should read from across the
-    room. Instead of tiny per-cell semantics, all twelve visual-only
-    keys share one color and one animation for the highest-priority
-    current event.
+    DELIBERATELY MINIMAL: the bottom 12 cells only light up for
+    THREE events. Everything else (low stock, paid orders,
+    restock pending, etc.) is communicated via the kiosk and the
+    top-row action keys — NOT via this block.
+
+    The three events:
+        1. Bridge pushed a fresh count-change flash
+           (green = added, amber = removed/sold)
+        2. A fruit just hit zero (red blink — out of stock)
+        3. Nothing — block is OFF.
+
+    Everything below this rule set is by design: the keypad block
+    is reserved as a dramatic visual on camera, not a status
+    dashboard. Calm = dark.
     """
 
-    mode = "solid"
-    color = COLOR_DIM_GREY
+    # 1. Fresh count-change flash wins.
+    still_active = []
+    active_color = None
+    for flash in active_flashes:
+        if ts >= flash["until_ms"]:
+            continue
+        active_color = flash["color"]
+        still_active.append(flash)
+    active_flashes[:] = still_active
+    if active_color is not None:
+        painted = breathe(active_color, scale(active_color, 10), ts, 520)
+        for index in STATUS_GRID_KEYS:
+            set_pad(index, painted)
+        return
 
-    health = state.get("health", {})
-    health_problem = False
-    if isinstance(health, dict):
-        for key in ("camera", "model", "phone"):
-            status = (health.get(key) or "unknown").lower()
-            if status in ("warn", "fail", "error", "down"):
-                health_problem = True
+    # 2. Out of stock (apple or banana hit zero, store is open,
+    # and bridge has actually pushed real data so we're not
+    # false-alarming on cold-boot defaults).
+    if bridge_has_pushed and _store_is_open():
+        apple_count, _, _ = _fruit_info("apple")
+        banana_count, _, _ = _fruit_info("banana")
+        if apple_count == 0 or banana_count == 0:
+            painted = blink(COLOR_RED, COLOR_OFF, ts, 320)
+            for index in STATUS_GRID_KEYS:
+                set_pad(index, painted)
+            return
 
-    # Highest priority: backend/device error.
-    if state.get("error_message") or health_problem:
-        mode = "blink"
-        color = COLOR_RED
-    else:
-        # Transient fruit movement: bridge pushes green/amber/red
-        # pulses. Any one of those makes the whole bottom grid pulse
-        # the same color for clean video.
-        still_active = []
-        active_color = None
-        for flash in active_flashes:
-            if ts >= flash["until_ms"]:
-                continue
-            active_color = flash["color"]
-            still_active.append(flash)
-        active_flashes[:] = still_active
-        if active_color is not None:
-            mode = "pulse"
-            color = active_color
-        else:
-            apple_count, _apple_active, apple_low = _fruit_info("apple")
-            banana_count, _banana_active, banana_low = _fruit_info("banana")
-            restock_status = str(state.get("restock_status") or "")
-            order_status = (state.get("order_status") or "").lower()
-            # Only show the OUT-OF-STOCK alarm AFTER the bridge has
-            # pushed at least one state payload. Without this guard,
-            # a fresh boot (before the bridge connects) defaults
-            # counts to 0 and false-alarms red on every cold start.
-            if bridge_has_pushed and _store_is_open() and (apple_count == 0 or banana_count == 0):
-                mode = "blink"
-                color = COLOR_RED
-            elif restock_status == "pending_approval":
-                mode = "pulse"
-                color = COLOR_AMBER
-            elif restock_status in ("approved", "payment_started"):
-                mode = "pulse"
-                color = COLOR_CYAN
-            elif restock_status in ("ordered", "received"):
-                mode = "solid"
-                color = COLOR_GREEN
-            elif state.get("payment_pending") or order_status == "reserved":
-                mode = "pulse"
-                color = COLOR_GOLD
-            elif order_status in ("paid", "packed"):
-                mode = "pulse" if order_status == "paid" else "solid"
-                color = COLOR_GREEN
-            elif _store_is_open():
-                # No event in flight — calm blue solid. Low-stock
-                # awareness is intentionally NOT surfaced on the
-                # keypad block (it'd pulse amber the whole demo
-                # whenever inventory dips). The kiosk's Activity
-                # panel + the per-fruit cells in rows 1-2 carry
-                # that signal.
-                mode = "solid"
-                color = COLOR_BLUE
-
-    if mode == "blink":
-        painted = blink(color, COLOR_OFF, ts, 320)
-    elif mode == "pulse":
-        painted = breathe(color, scale(color, 10), ts, 520)
-    else:
-        painted = scale(color, 55 if color != COLOR_DIM_GREY else 100)
-
-    for index in STATUS_GRID_KEYS:
-        set_pad(index, painted)
+    # 3. Nothing happening — block is OFF. paint_legend already
+    # cleared every cell to COLOR_OFF, so this branch is a no-op.
 
 
 def _fruit_info(name):
@@ -601,9 +550,8 @@ def paint():
     if hasattr(keypad, "clear"):
         keypad.clear()
     paint_legend(ts)              # everything off
-    paint_ready_invite(ts)        # only if operator hasn't pressed READY
-    paint_attention(ts)           # only keys that have pending work
-    paint_status_grid(ts)         # lower 3x4 same-color video status block
+    paint_action_buttons(ts)      # top row: 4 solid color labels, always
+    paint_status_grid(ts)         # lower 3x4: dark unless add/remove/out
     # Press flash is the final overlay so the operator sees their
     # press regardless of what every other layer painted there.
     if flash_index >= 0 and ts < flash_until_ms:
