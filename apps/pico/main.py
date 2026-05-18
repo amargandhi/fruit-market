@@ -169,8 +169,14 @@ HEALTH_COLORS = {
 
 
 # Last full state payload from the host. Defaults are conservative
-# (everything off) so a Pico that boots before the bridge connects
-# shows nothing rather than stale data.
+# so a Pico that boots before the bridge connects shows a calm
+# "waiting for the host" state, NOT a false out-of-stock alarm.
+#
+# Key invariant: ``attention.ready=True`` by default so the
+# firmware treats the store as "not yet open" (operator hasn't
+# pressed READY). Without this, ``_store_is_open()`` returns True
+# and the (default zero) fruit counts trigger the out-of-stock
+# red blink before any real state has arrived.
 state = {
     "event": "state",
     "active_item": "",
@@ -185,7 +191,7 @@ state = {
     "payment_pending": False,
     "restock_status": "",        # "" | "pending_approval" | "approved" | "ordered" | ...
     "attention": {
-        "ready":      False,
+        "ready":      True,      # invite the first press until the bridge says otherwise
         "packed":     False,
         "cancel":     False,
         "supply_buy": False,
@@ -211,6 +217,14 @@ FLASH_DURATION_MS = 180
 # red=out-of-stock). Each entry:
 #   {"index": 0-15, "color": (r,g,b), "until_ms": deadline}
 active_flashes = []
+
+
+# Flipped True the first time ``apply_host_payload`` receives a
+# state event from the bridge. Used to suppress alarms that would
+# otherwise false-fire on the firmware's defaults (e.g. fruit
+# counts default to 0 → out-of-stock red blink before any real
+# data has landed).
+bridge_has_pushed = False
 
 
 # --- Helpers --------------------------------------------------------
@@ -255,10 +269,7 @@ def breathe(base, dim, ts, period_ms):
     """
 
     phase = (ts % period_ms) / period_ms
-    if phase < 0.5:
-        t = phase * 2.0
-    else:
-        t = (1.0 - phase) * 2.0
+    t = phase * 2.0 if phase < 0.5 else (1.0 - phase) * 2.0
     return tuple(int(dim[i] + (base[i] - dim[i]) * t) for i in range(3))
 
 
@@ -392,8 +403,11 @@ def paint_status_grid(ts):
             banana_count, _banana_active, banana_low = _fruit_info("banana")
             restock_status = str(state.get("restock_status") or "")
             order_status = (state.get("order_status") or "").lower()
-
-            if _store_is_open() and (apple_count == 0 or banana_count == 0):
+            # Only show the OUT-OF-STOCK alarm AFTER the bridge has
+            # pushed at least one state payload. Without this guard,
+            # a fresh boot (before the bridge connects) defaults
+            # counts to 0 and false-alarms red on every cold start.
+            if bridge_has_pushed and _store_is_open() and (apple_count == 0 or banana_count == 0):
                 mode = "blink"
                 color = COLOR_RED
             elif restock_status == "pending_approval":
@@ -457,9 +471,9 @@ def _fruit_info(name):
 
 def _store_is_open():
     attention = state.get("attention", {})
-    if isinstance(attention, dict) and attention.get("ready"):
-        return False
-    return True
+    # attention.ready=True means "operator needs to press READY" →
+    # store is NOT yet open. Anything else means it IS open.
+    return not (isinstance(attention, dict) and attention.get("ready"))
 
 
 def paint_fruit_status(ts):
@@ -645,12 +659,13 @@ def apply_host_payload(payload):
     rather than patch.
     """
 
-    global state
+    global state, bridge_has_pushed
 
     if not isinstance(payload, dict):
         return
     event = payload.get("event")
     if event == "state":
+        bridge_has_pushed = True
         state = {
             "event":           "state",
             "active_item":     payload.get("active_item", ""),
