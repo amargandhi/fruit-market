@@ -1,7 +1,7 @@
 # Fruit Market — developer entry points.
 # All targets assume `uv` is installed (https://docs.astral.sh/uv/).
 
-.PHONY: install install-vision check test check-sponsors dev restock-supplier restock-tunnel restock-paysponge-probe restock-live-smoke clean
+.PHONY: install install-vision check test check-sponsors dev app restock-supplier restock-tunnel restock-paysponge-probe restock-live-smoke clean
 
 # Install runtime + dev deps. Idempotent.
 install:
@@ -28,6 +28,13 @@ check-sponsors:
 # Run the FastAPI app with reload. Lands in Phase 2 (Track B).
 dev:
 	uv run uvicorn fruit_market.api.app:app --reload --port 8000
+
+# Rebuild the macOS continuous-capture daemon (.app bundle). Also
+# busts Finder + Dock icon caches so the brand icon shows up on
+# the next launch without a logout/reboot. Run this after any
+# change to apps/fm-camera/Sources/, Info.plist, or Resources/.
+app:
+	bash apps/fm-camera/build.sh
 
 # Run the staging supplier API. Put this behind PaySponge Gateway/x402
 # for the optional restock demo.
