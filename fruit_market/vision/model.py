@@ -96,6 +96,17 @@ _LOC_TOKEN_RE = re.compile(r"<loc\d{4}>")
 _DETECTION_RE = re.compile(
     r"(?:<loc\d{4}>){4}\s+(?P<noun>[a-zA-Z_]+)"
 )
+# Quartet-only pattern (no noun required) — used when we want to
+# extract the box coordinates themselves for NMS deduplication.
+_LOC_QUARTET_RE = re.compile(
+    r"<loc(\d{4})><loc(\d{4})><loc(\d{4})><loc(\d{4})>"
+)
+# Two boxes with IoU above this threshold are treated as the same
+# instance and one gets suppressed. 0.5 is the standard COCO-style
+# default; we don't want to suppress lightly-overlapping nearby
+# fruits, but PaliGemma sometimes emits two near-identical boxes
+# for one instance and those get rolled together.
+_NMS_IOU_THRESHOLD = 0.5
 
 
 class CountModelError(RuntimeError):
@@ -305,9 +316,11 @@ class PaliGemmaCounter:
         """Run ``detect {noun}`` and count the bounding boxes.
 
         PaliGemma 2 returns blocks of 4 location tokens per detected
-        instance. We count groups-of-4 ``<loc####>`` tokens — that's
-        more robust than counting noun mentions (PaliGemma occasionally
-        omits the trailing noun on the last detection).
+        instance (y_min, x_min, y_max, x_max, in 0..1023 normalized
+        coordinates). We parse the boxes and apply NMS to dedupe
+        overlapping detections of the same instance — without this,
+        a single piece of fruit can produce 2 nearly-identical
+        boxes and we count it twice.
 
         Caller must hold ``self._lock``.
         """
@@ -327,21 +340,22 @@ class PaliGemmaCounter:
         text = _coerce_text(response)
         self._last_raw_response = text
 
-        loc_tokens = _LOC_TOKEN_RE.findall(text)
-        n_locs = len(loc_tokens)
-        # No locations at all → either zero instances OR a parse
-        # failure. PaliGemma emits the empty string for "no
-        # detections", which is a legitimate zero. We only treat it
-        # as a parse failure if the response is non-empty garbage.
-        if n_locs == 0:
+        boxes = _parse_loc_boxes(text)
+        # No boxes at all → either zero instances OR a parse failure.
+        # PaliGemma emits the empty string for "no detections", which
+        # is a legitimate zero. We only treat it as a parse failure
+        # if the response is non-empty garbage.
+        if not boxes:
             if text.strip() == "" or "no" in text.lower():
                 return 0
             raise CountModelError(
                 f"detect response has no location tokens: {text!r}"
             )
-        # 4 location tokens per instance. Round (the model has been
-        # observed to emit partial boxes when cut off by max_tokens).
-        return n_locs // 4
+        # Dedupe overlapping boxes (PaliGemma occasionally emits two
+        # near-identical boxes for one instance — that becomes a
+        # phantom +1 on the count without this step).
+        deduped = _nms(boxes, _NMS_IOU_THRESHOLD)
+        return len(deduped)
 
     def _integer_count_locked(self, image: object, noun: str) -> int:
         """Legacy ``count {noun}`` path — single-integer response.
@@ -407,6 +421,75 @@ class PaliGemmaCounter:
     @property
     def engine_load_s(self) -> float | None:
         return self._engine_load_s
+
+
+def _parse_loc_boxes(text: str) -> list[tuple[int, int, int, int]]:
+    """Extract ``(y0, x0, y1, x1)`` tuples from a PaliGemma detect
+    response. Coordinates are PaliGemma's raw 0..1023 grid units;
+    we don't bother converting to pixels since NMS only needs them
+    to be in the same comparable units.
+
+    Returns an empty list if no location-token quartets are found.
+    """
+
+    boxes: list[tuple[int, int, int, int]] = []
+    for match in _LOC_QUARTET_RE.finditer(text):
+        y0, x0, y1, x1 = (int(g) for g in match.groups())
+        # Guard against PaliGemma occasionally emitting boxes in
+        # the wrong order — swap so y0<=y1 and x0<=x1.
+        if y0 > y1:
+            y0, y1 = y1, y0
+        if x0 > x1:
+            x0, x1 = x1, x0
+        boxes.append((y0, x0, y1, x1))
+    return boxes
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """Intersection-over-union of two ``(y0, x0, y1, x1)`` boxes."""
+
+    ay0, ax0, ay1, ax1 = a
+    by0, bx0, by1, bx1 = b
+    iy0, ix0 = max(ay0, by0), max(ax0, bx0)
+    iy1, ix1 = min(ay1, by1), min(ax1, bx1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    area_a = (ay1 - ay0) * (ax1 - ax0)
+    area_b = (by1 - by0) * (bx1 - bx0)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms(
+    boxes: list[tuple[int, int, int, int]],
+    iou_threshold: float,
+) -> list[tuple[int, int, int, int]]:
+    """Greedy non-maximum suppression.
+
+    We sort by area (largest first — PaliGemma's confidence isn't
+    directly accessible from the text output, so area is the best
+    proxy: a confident "this is the whole fruit" box is bigger than
+    a stray "I'm not sure" box near the edge), then keep boxes whose
+    IoU with every previously-kept box is below ``iou_threshold``.
+
+    O(N²) but N is the number of detections in one image (typically
+    < 30), so the constant factor doesn't matter.
+    """
+
+    if not boxes:
+        return []
+    by_area = sorted(
+        boxes,
+        key=lambda b: (b[2] - b[0]) * (b[3] - b[1]),
+        reverse=True,
+    )
+    kept: list[tuple[int, int, int, int]] = []
+    for box in by_area:
+        if all(_iou(box, k) <= iou_threshold for k in kept):
+            kept.append(box)
+    return kept
 
 
 def _coerce_text(response: object) -> str:

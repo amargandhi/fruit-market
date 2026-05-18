@@ -166,6 +166,25 @@ class VisionWatcher:
             if heartbeat_seconds is not None
             else float(os.environ.get("FM_VISION_HEARTBEAT_SECONDS", "5"))
         )
+        # Stability window: only write to inventory after the model
+        # has returned the same count for N CONSECUTIVE ticks. This
+        # dampens single-tick flickers from borderline detections
+        # (the model occasionally sees 3 fruits as 4 when one is
+        # partially occluded). Trade-off: one extra tick of latency
+        # before count changes propagate.
+        #   N=1 → write every tick (no smoothing, was the old behavior)
+        #   N=2 → write after the count repeats once (~1.5 s extra latency)
+        #   N=3 → very conservative; only write on rock-solid 3-in-a-row
+        # Override with FM_VISION_STABILITY_TICKS.
+        self._stability_ticks = max(
+            1, int(os.environ.get("FM_VISION_STABILITY_TICKS", "2"))
+        )
+        # Per-item rolling buffer of the last N model reads — the
+        # value the watcher commits to inventory is the latest read
+        # IFF every entry in the buffer agrees. Distinct from
+        # ``status.last_counts`` (which is the most recent COMMITTED
+        # count, used for change-classification).
+        self._recent_reads: dict[str, list[int]] = {}
         self._previous_frame: bytes | None = None
         # Freshest snapshot for the kiosk's video feed. Distinct
         # from ``_previous_frame`` (motion-gate baseline) — that
@@ -304,29 +323,52 @@ class VisionWatcher:
         for item in items_to_count:
             if item.name not in batch:
                 continue
-            count = batch[item.name]
+            raw_read = batch[item.name]
+
+            # Stability check: push the raw read into the rolling
+            # buffer, then only commit if the buffer is full AND
+            # every entry agrees. This is the "see it N times
+            # before believing it" trick — dampens single-tick
+            # flickers from borderline detections without adding
+            # much latency (one extra tick = ~1.5 s at the default
+            # poll rate).
+            buf = self._recent_reads.setdefault(item.name, [])
+            buf.append(raw_read)
+            if len(buf) > self._stability_ticks:
+                buf.pop(0)
+            if len(buf) < self._stability_ticks or len(set(buf)) > 1:
+                # Not enough history yet, or readings disagree —
+                # don't commit. The previous committed count
+                # stays visible on the kiosk + inventory.
+                continue
+
+            count = raw_read
             counts[item.name] = count
 
-            # Detect change vs the previous tick. Anything other than
-            # "unchanged" lands in the ring buffer that powers the
-            # judge-facing Activity panel + the Pico's flash LED.
+            # Detect change vs the previous COMMITTED tick. Anything
+            # other than "unchanged" lands in the ring buffer that
+            # powers the judge-facing Activity panel + the Pico's
+            # flash LED.
             prev_count = self.status.last_counts.get(item.name)
             kind = _classify_change(prev_count, count)
-            if kind != "unchanged":
-                self.status.recent_changes.append({
-                    "ts": change_ts,
-                    "item_id": item.id,
-                    "item_name": item.name,
-                    "prev": prev_count,
-                    "new": count,
-                    "delta": count - (prev_count or 0),
-                    "kind": kind,
-                })
-                # Trim the ring buffer.
-                if len(self.status.recent_changes) > MAX_CHANGE_HISTORY:
-                    self.status.recent_changes = self.status.recent_changes[
-                        -MAX_CHANGE_HISTORY:
-                    ]
+            if kind == "unchanged":
+                # Re-confirming an existing count is the happy path;
+                # don't spam the Activity panel with no-op rows.
+                continue
+            self.status.recent_changes.append({
+                "ts": change_ts,
+                "item_id": item.id,
+                "item_name": item.name,
+                "prev": prev_count,
+                "new": count,
+                "delta": count - (prev_count or 0),
+                "kind": kind,
+            })
+            # Trim the ring buffer.
+            if len(self.status.recent_changes) > MAX_CHANGE_HISTORY:
+                self.status.recent_changes = self.status.recent_changes[
+                    -MAX_CHANGE_HISTORY:
+                ]
 
             self._inventory.reconcile_physical_count(
                 item_id=item.id,
@@ -335,19 +377,33 @@ class VisionWatcher:
                 confidence=0.9,
             )
 
-        if not counts:
+        # ``batch`` is the raw model reads for this tick; ``counts``
+        # is only the items that PASSED the stability gate (the
+        # model returned the same value N ticks in a row). It's
+        # legitimate for ``counts`` to be empty when ``batch`` was
+        # populated — that just means nothing stabilized this tick.
+        # Only a wholesale model misfire (empty batch) counts as a
+        # failure.
+        if not batch:
             self.status.consecutive_failures += 1
             self.status.last_tick_ok = False
             return
 
-        self.status.last_counts = counts
-        # Back-compat: ``last_count`` is the active item's count if
-        # we have one, else the first counted noun.
-        if active is not None and active.name in counts:
-            self.status.last_count = counts[active.name]
-        else:
-            self.status.last_count = next(iter(counts.values()))
+        # Update the "last successful model read" timestamp on EVERY
+        # tick where the model returned something — including ticks
+        # where nothing stabilized yet. The motion-gate heartbeat
+        # uses this to decide whether to force a re-read, and it
+        # should react to model activity, not to commits.
         self.status.last_count_at_monotonic = time.monotonic()
+
+        if counts:
+            self.status.last_counts.update(counts)
+            # Back-compat: ``last_count`` is the active item's count
+            # if we have one, else the first newly-committed noun.
+            if active is not None and active.name in counts:
+                self.status.last_count = counts[active.name]
+            else:
+                self.status.last_count = next(iter(counts.values()))
         self.status.consecutive_failures = 0
         self.status.last_tick_ok = True
 

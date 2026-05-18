@@ -17,6 +17,9 @@ from fruit_market.vision.model import (
     DETECT_PROMPT,
     PaliGemmaCounter,
     _coerce_text,
+    _iou,
+    _nms,
+    _parse_loc_boxes,
 )
 
 
@@ -69,6 +72,74 @@ def test_detect_loc_token_regex_returns_zero_on_empty_response() -> None:
 
     assert _LOC_TOKEN_RE.findall("") == []
     assert _LOC_TOKEN_RE.findall("no bananas") == []
+
+
+def test_parse_loc_boxes_extracts_quartets() -> None:
+    """Three quartets in the response → three (y0,x0,y1,x1) tuples."""
+
+    response = (
+        "<loc0010><loc0020><loc0500><loc0600> banana ;"
+        " <loc0050><loc0060><loc0550><loc0650> banana"
+    )
+    boxes = _parse_loc_boxes(response)
+    assert len(boxes) == 2
+    assert boxes[0] == (10, 20, 500, 600)
+    assert boxes[1] == (50, 60, 550, 650)
+
+
+def test_parse_loc_boxes_swaps_inverted_coordinates() -> None:
+    """If PaliGemma emits the box with y1<y0, we swap so it's valid."""
+
+    response = "<loc0500><loc0600><loc0010><loc0020> apple"
+    boxes = _parse_loc_boxes(response)
+    assert boxes == [(10, 20, 500, 600)]
+
+
+def test_iou_zero_for_disjoint_boxes() -> None:
+    a = (0, 0, 100, 100)
+    b = (200, 200, 300, 300)
+    assert _iou(a, b) == 0.0
+
+
+def test_iou_one_for_identical_boxes() -> None:
+    box = (10, 20, 110, 120)
+    assert _iou(box, box) == 1.0
+
+
+def test_iou_halfway_overlap() -> None:
+    """100×100 boxes overlapping by a 100×50 strip = 5000 inter, 15000 union."""
+
+    a = (0, 0, 100, 100)
+    b = (50, 0, 150, 100)
+    assert abs(_iou(a, b) - (5000 / 15000)) < 1e-6
+
+
+def test_nms_collapses_overlapping_boxes_for_same_fruit() -> None:
+    """Two near-identical boxes (PaliGemma sometimes emits twins
+    for one instance) collapse to one — the real fix for inflated
+    counts on borderline scenes."""
+
+    boxes = [
+        (10, 10, 100, 100),   # the "real" detection
+        (12, 12, 102, 102),   # near-duplicate, IoU > 0.5 → suppressed
+        (200, 200, 290, 290), # genuinely separate fruit
+    ]
+    kept = _nms(boxes, iou_threshold=0.5)
+    assert len(kept) == 2
+    assert (200, 200, 290, 290) in kept
+
+
+def test_nms_keeps_distinct_nearby_instances() -> None:
+    """Two fruits sitting close together (IoU below threshold)
+    must both survive — we never want to count two real fruits
+    as one."""
+
+    boxes = [
+        (10, 10, 100, 100),
+        (10, 110, 100, 200),  # adjacent, not overlapping
+    ]
+    kept = _nms(boxes, iou_threshold=0.5)
+    assert len(kept) == 2
 
 
 def test_default_mode_is_detect() -> None:
