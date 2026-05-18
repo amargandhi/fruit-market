@@ -50,6 +50,29 @@ HEALTH_VALUES: tuple[str, ...] = (
 
 
 @dataclass(frozen=True)
+class FlashInstruction:
+    """One transient LED pulse for the firmware to overlay.
+
+    Use case: punctuate a count change. The watcher noticed an
+    apple was removed → bridge schedules a flash on the apple
+    row-2 cell (key 8) with amber color, 700 ms duration. The
+    firmware paints it on top of every other layer until the
+    duration expires, then drops it.
+    """
+
+    index: int                       # 0..15
+    color: tuple[int, int, int]      # RGB 0..255
+    duration_ms: int = 700
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "index": int(self.index),
+            "color": [int(self.color[0]), int(self.color[1]), int(self.color[2])],
+            "duration_ms": int(self.duration_ms),
+        }
+
+
+@dataclass(frozen=True)
 class PicoStatePayload:
     """One full state snapshot pushed to the firmware.
 
@@ -69,6 +92,9 @@ class PicoStatePayload:
         operator focus.
       * ``health`` → row-3 subsystem indicators.
       * ``error_message`` → row-3 ERROR strobe.
+      * ``flashes`` → transient count-change pulses (green=added,
+        amber=removed, red=out-of-stock). Each schedules with a
+        deadline; the firmware drops expired flashes on its own.
     """
 
     active_item: str = ""
@@ -81,6 +107,7 @@ class PicoStatePayload:
     attention: dict[str, bool] = field(default_factory=dict)
     health: dict[str, str] = field(default_factory=dict)
     error_message: str = ""
+    flashes: tuple[FlashInstruction, ...] = ()
 
     def to_wire(self) -> dict[str, object]:
         """Plain-dict shape that ``serialize_state`` will encode."""
@@ -105,6 +132,7 @@ class PicoStatePayload:
             "attention": attention,
             "health": health,
             "error_message": str(self.error_message or ""),
+            "flashes": [f.to_wire() for f in self.flashes],
         }
 
 

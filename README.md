@@ -120,25 +120,37 @@ can run the stall without looking at a screen.
 | **2 CANCEL** | Cancel reservation OR restock | An order is stuck or a restock needs rejecting. Stock returns to inventory. |
 | **3 SUPPLY_BUY** | Approve restock payment | The cyan key is breathing fast amber — a supplier basket is staged, press to pay PaySponge. |
 
-**Row 1 — secondary actions + status indicators (no normal press needed):**
-- **4 (visual)** blue breathe = phone call in progress
-- **5 (visual)** gold breathe = customer mid-checkout, payment pending
+**Row 1 — secondary actions + status indicators (only paint on
+active event; OFF otherwise):**
+- **4 (visual)** blue breathe ONLY during a live phone call
+- **5 (visual)** gold breathe ONLY while customer is mid-checkout
 - **6 COUNT_NOW** — force a vision recount past the motion gate (diagnostic)
 - **7 CONFIRM** — confirm a pending teach proposal (rare in the auto-seeded demo)
 
-**Row 2 — at-a-glance item + order status:**
-- 8 / 9 breathe when that fruit is the active item
-- 10 (purple breathe) when an order is reserved waiting for Stripe Checkout
+**Row 2 — active fruit cell + order status (event-driven):**
+- 8 (apple) / 9 (banana): the active fruit glows softly. When the
+  count changes, the cell **pulses** — bright green for added,
+  amber for removed. When the count hits zero, the cell **strobes
+  red** as an out-of-stock alarm.
+- 10 (purple breathe) ONLY while an order is reserved waiting for Stripe Checkout
 - 11 (green breathe → solid) when an order is paid → packed
 
-**Row 3 — system health:**
-- 12 / 13 / 14: bright = `ok`, dim = `mock`, amber breathe = `warmup`, red blink = `error`
+**Row 3 — system health (only paint on PROBLEMS):**
+- 12 / 13 / 14: dark when `ok` or `mock`, amber breathe on `warmup`,
+  red blink on `error`/`fail`/`down`. A healthy system has zero
+  lights here — operator only notices when something breaks.
 - 15: blinks red/white when the bridge reports an error condition
 
-Animations follow a layered paint pipeline (legend → attention →
-item → order → workflow → restock phase → health → flashes →
-press) so the keys never get "stuck" — each frame is a complete
-re-render from the most recent bridge payload.
+**Idle steady state** (nothing pending, no errors): only **one or
+two cells lit** — the active fruit's resting glow, and READY
+breathing if the operator hasn't pressed it yet. Everything else
+is dark. This makes the keypad cinematic on video: dark most of
+the time, with bright dramatic events when something happens.
+
+Animations follow a layered paint pipeline (legend → ready invite
+→ attention → active fruit → workflow → restock phase → health →
+count-change flashes → press) so keys never get "stuck" — each
+frame is a complete re-render from the most recent bridge payload.
 
 ## Sponsor and model map
 

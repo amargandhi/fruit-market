@@ -17,6 +17,7 @@ from typing import Any
 from fruit_market.hardware.pico_bridge import (
     PicoBridge,
     api_state_to_payload,
+    build_flashes,
 )
 from fruit_market.hardware.pico_protocol import (
     PicoStatePayload,
@@ -128,6 +129,107 @@ def test_api_state_to_payload_maps_restock_status_and_cancel_attention() -> None
     assert payload.attention["cancel"] is True
 
 
+# ─── build_flashes ──────────────────────────────────────────────────
+
+
+def test_build_flashes_green_pulse_on_added() -> None:
+    """An ``added`` entry from /api/vision/activity becomes a green
+    flash on the matching fruit's keypad cell."""
+
+    now = 100.0
+    activity = [
+        {"kind": "added", "item_name": "apple", "ts": now - 0.3,
+         "prev": 2, "new": 3, "delta": 1},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert len(flashes) == 1
+    assert flashes[0].index == 8                   # apple = key 8
+    assert flashes[0].color == (0, 220, 40)        # green
+    assert flashes[0].duration_ms == 700
+
+
+def test_build_flashes_amber_pulse_on_removed_banana() -> None:
+    now = 100.0
+    activity = [
+        {"kind": "removed", "item_name": "banana", "ts": now - 0.5,
+         "prev": 3, "new": 2, "delta": -1},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert len(flashes) == 1
+    assert flashes[0].index == 9                   # banana = key 9
+    assert flashes[0].color == (220, 130, 0)       # amber
+
+
+def test_build_flashes_red_strobe_on_out_of_stock() -> None:
+    """The longest + loudest visual — out-of-stock is the headline."""
+
+    now = 100.0
+    activity = [
+        {"kind": "out", "item_name": "banana", "ts": now - 0.5,
+         "prev": 2, "new": 0, "delta": -2},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert len(flashes) == 1
+    assert flashes[0].color == (220, 0, 0)         # red
+    assert flashes[0].duration_ms == 1200          # longest pulse
+
+
+def test_build_flashes_drops_stale_entries() -> None:
+    """Entries older than the fresh window must NOT re-flash on
+    every push — that would make the keypad strobe forever."""
+
+    now = 100.0
+    activity = [
+        {"kind": "added", "item_name": "apple", "ts": now - 10.0,
+         "prev": 2, "new": 3, "delta": 1},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert flashes == []
+
+
+def test_build_flashes_one_per_fruit_per_push() -> None:
+    """Multiple recent changes on the same fruit collapse to one
+    flash (the most recent wins) so we don't stutter."""
+
+    now = 100.0
+    activity = [
+        # Newest entries first (matches the API's ordering).
+        {"kind": "added", "item_name": "apple", "ts": now - 0.2,
+         "prev": 2, "new": 3, "delta": 1},
+        {"kind": "removed", "item_name": "apple", "ts": now - 0.4,
+         "prev": 3, "new": 2, "delta": -1},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert len(flashes) == 1
+    assert flashes[0].color == (0, 220, 40)        # green (newer wins)
+
+
+def test_build_flashes_handles_apple_and_banana_in_one_push() -> None:
+    now = 100.0
+    activity = [
+        {"kind": "added",   "item_name": "apple",  "ts": now - 0.1,
+         "prev": 2, "new": 3, "delta": 1},
+        {"kind": "removed", "item_name": "banana", "ts": now - 0.2,
+         "prev": 3, "new": 2, "delta": -1},
+    ]
+    flashes = build_flashes(activity, now_epoch_seconds=now)
+    assert len(flashes) == 2
+    indices = {f.index for f in flashes}
+    assert indices == {8, 9}
+
+
+def test_build_flashes_ignores_unknown_fruit() -> None:
+    """A fruit we don't have a Pico cell for produces no flash —
+    no crash, no LED."""
+
+    now = 100.0
+    activity = [
+        {"kind": "added", "item_name": "kiwi", "ts": now - 0.2,
+         "prev": 1, "new": 2, "delta": 1},
+    ]
+    assert build_flashes(activity, now_epoch_seconds=now) == []
+
+
 # ─── Bridge with mocked serial + API ───────────────────────────────
 
 
@@ -190,6 +292,13 @@ class _FakeApi:
     def post_action(self, action: str) -> dict[str, Any]:
         self.actions_posted.append(action)
         return {"ok": True}
+
+    def fetch_vision_activity(self, limit: int = 8) -> list[dict[str, Any]]:
+        # Activity-driven flashes are tested separately via
+        # build_flashes(); the bridge integration tests just need
+        # this to exist and return an empty list.
+        _ = limit
+        return []
 
 
 def _build_bridge(serial_obj: _FakeSerial, api: _FakeApi) -> PicoBridge:

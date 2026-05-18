@@ -37,12 +37,13 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from fruit_market.hardware.pico_protocol import (
+    FlashInstruction,
     PicoButtonEvent,
     PicoHello,
     PicoStatePayload,
@@ -180,8 +181,105 @@ class ApiClient:
             data = r.json()
             return data if isinstance(data, dict) else {}
 
+    def fetch_vision_activity(self, limit: int = 8) -> list[dict[str, object]]:
+        """Recent vision count CHANGES (not every count).
+
+        The bridge uses these to translate freshly-detected fruit
+        moves into Pico LED flashes (green=added, amber=removed,
+        red=out-of-stock).
+
+        Returns an empty list on any error — keypad flashes are
+        a "nice to have" decoration; never let a hiccup here block
+        the main state push.
+        """
+
+        try:
+            with httpx.Client(timeout=self.timeout_s) as client:
+                r = client.get(
+                    f"{self.base_url}/api/vision/activity",
+                    headers={"User-Agent": HTTP_USER_AGENT, "Accept": "application/json"},
+                    params={"limit": limit},
+                )
+                r.raise_for_status()
+                data = r.json()
+                entries = data.get("entries") if isinstance(data, dict) else []
+                if not isinstance(entries, list):
+                    return []
+                return [e for e in entries if isinstance(e, dict)]
+        except Exception:  # noqa: BLE001
+            return []
+
 
 # ─── State mapping ──────────────────────────────────────────────────
+
+
+# ─── Count-change flash translation ────────────────────────────────
+#
+# Mapping from fruit name → row-2 cell index on the keypad. Anything
+# not in this table doesn't get a count-change flash (no cell to
+# light up). The active-fruit cell is the one we strobe red when
+# stock hits zero AND the one we pulse green/amber on +1/-1.
+_FRUIT_KEY: dict[str, int] = {
+    "apple":  8,
+    "banana": 9,
+}
+
+# Per-kind RGB colour + duration. Tuned so the eye reads them:
+#   green = "this is good, count went up"
+#   amber = "neutral, count went down"
+#   red   = "alarm, we're out"
+_FLASH_KINDS: dict[str, tuple[tuple[int, int, int], int]] = {
+    "added":      ((0, 220, 40),  700),
+    "restocked":  ((0, 220, 40),  900),  # bigger event, slightly longer pulse
+    "first_seen": ((0, 180, 200), 500),  # cyan-ish: model just discovered fruit
+    "removed":    ((220, 130, 0), 700),
+    "out":        ((220, 0, 0),  1200),  # the longest + loudest flash
+}
+
+# How fresh a count change has to be for the bridge to translate
+# it into a flash. The watcher writes timestamps in epoch seconds;
+# anything older than this window is "we already showed it" — we
+# don't re-flash on every state push.
+_FLASH_FRESH_WINDOW_SECONDS = 2.5
+
+
+def build_flashes(
+    activity_entries: list[dict[str, object]],
+    *,
+    now_epoch_seconds: float | None = None,
+) -> list[FlashInstruction]:
+    """Pick out the freshly-arrived count changes and convert them
+    to flash instructions for the firmware.
+
+    Only entries with ``ts >= now - FRESH_WINDOW`` are flashed,
+    and at most one flash per fruit per push (the most recent
+    change wins). This dedupes the case where a fruit's count
+    bounces around in successive ticks — we want one clean pulse,
+    not a stutter.
+    """
+
+    import time  # noqa: PLC0415
+
+    now = now_epoch_seconds if now_epoch_seconds is not None else time.time()
+    seen_keys: set[int] = set()
+    flashes: list[FlashInstruction] = []
+    for entry in activity_entries:
+        kind = str(entry.get("kind", "")).lower()
+        if kind not in _FLASH_KINDS:
+            continue
+        item_name = str(entry.get("item_name", "")).lower().rstrip("s")
+        index = _FRUIT_KEY.get(item_name)
+        if index is None or index in seen_keys:
+            continue
+        ts = entry.get("ts")
+        if not isinstance(ts, int | float):
+            continue
+        if now - float(ts) > _FLASH_FRESH_WINDOW_SECONDS:
+            continue
+        color, duration = _FLASH_KINDS[kind]
+        flashes.append(FlashInstruction(index=index, color=color, duration_ms=duration))
+        seen_keys.add(index)
+    return flashes
 
 
 def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
@@ -428,9 +526,21 @@ class PicoBridge:
                 logger.debug("api fetch_state failed: %s", exc)
                 self._stop.wait(self._state_interval)
                 continue
+            # Build the base payload from /api/state, then enrich
+            # with count-change flashes pulled from /api/vision/activity.
+            # Flashes are the demo's headline visual moment — a
+            # banana getting removed should produce a bright amber
+            # pulse on the Pico the same second the kiosk shows it.
+            activity = self._api.fetch_vision_activity()
+            flashes = build_flashes(activity)
             payload = api_state_to_payload(state)
+            if flashes:
+                payload = replace(payload, flashes=tuple(flashes))
             wire = serialize_state(payload)
-            if wire != self._last_state_pushed:
+            # ALWAYS push if there are flashes — they're transient
+            # and need to reach the firmware before they expire
+            # client-side. Otherwise only push on state change.
+            if flashes or wire != self._last_state_pushed:
                 self._push_to_pico(wire)
                 self._last_state_pushed = wire
             self._stop.wait(self._state_interval)
