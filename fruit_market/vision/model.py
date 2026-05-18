@@ -312,15 +312,35 @@ class PaliGemmaCounter:
                 per_noun[noun[:-1]] += 1
         return per_noun
 
-    def _detect_count_locked(self, image: object, noun: str) -> int:
-        """Run ``detect {noun}`` and count the bounding boxes.
+    def detect_boxes(self, image_bytes: bytes, noun: str) -> list[tuple[int, int, int, int]]:
+        """Return the dedup'd bounding boxes the model finds for ``noun``.
 
-        PaliGemma 2 returns blocks of 4 location tokens per detected
-        instance (y_min, x_min, y_max, x_max, in 0..1023 normalized
-        coordinates). We parse the boxes and apply NMS to dedupe
-        overlapping detections of the same instance — without this,
-        a single piece of fruit can produce 2 nearly-identical
-        boxes and we count it twice.
+        Exposed so the watcher can do cross-class dedup before
+        counting (PaliGemma's ``detect banana`` will sometimes draw
+        a box around an apple; the watcher catches that by also
+        detecting apple and dropping cross-class overlaps).
+
+        Returns a list of ``(y0, x0, y1, x1)`` tuples in PaliGemma's
+        0..1023 normalized coordinate space. Empty list = the
+        model saw zero of this noun. Intra-class NMS is applied
+        before returning so callers don't have to repeat it.
+        """
+
+        if not noun.strip():
+            raise ValueError("noun must be non-empty")
+        with self._lock:
+            self._load_locked()
+            assert self._model is not None
+            assert self._processor is not None
+            from PIL import Image  # noqa: PLC0415
+
+            image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            return self._detect_boxes_locked(image, noun.strip())
+
+    def _detect_boxes_locked(
+        self, image: object, noun: str,
+    ) -> list[tuple[int, int, int, int]]:
+        """Run ``detect {noun}`` and return dedup'd boxes.
 
         Caller must hold ``self._lock``.
         """
@@ -341,21 +361,28 @@ class PaliGemmaCounter:
         self._last_raw_response = text
 
         boxes = _parse_loc_boxes(text)
-        # No boxes at all → either zero instances OR a parse failure.
-        # PaliGemma emits the empty string for "no detections", which
-        # is a legitimate zero. We only treat it as a parse failure
-        # if the response is non-empty garbage.
         if not boxes:
+            # Empty / "no" response = legitimately zero. Anything
+            # else with no location tokens is unparseable garbage.
             if text.strip() == "" or "no" in text.lower():
-                return 0
+                return []
             raise CountModelError(
                 f"detect response has no location tokens: {text!r}"
             )
-        # Dedupe overlapping boxes (PaliGemma occasionally emits two
-        # near-identical boxes for one instance — that becomes a
-        # phantom +1 on the count without this step).
-        deduped = _nms(boxes, _NMS_IOU_THRESHOLD)
-        return len(deduped)
+        # Intra-class NMS: collapse near-identical twin boxes for
+        # the same physical instance.
+        return _nms(boxes, _NMS_IOU_THRESHOLD)
+
+    def _detect_count_locked(self, image: object, noun: str) -> int:
+        """Detect + count for a single class (single-class path).
+
+        Kept for the ``count(image, noun) -> int`` API which the
+        watcher uses for legacy/test fallbacks. Cross-class dedup
+        is the watcher's responsibility — call ``detect_boxes``
+        directly when you have multiple classes.
+        """
+
+        return len(self._detect_boxes_locked(image, noun))
 
     def _integer_count_locked(self, image: object, noun: str) -> int:
         """Legacy ``count {noun}`` path — single-integer response.

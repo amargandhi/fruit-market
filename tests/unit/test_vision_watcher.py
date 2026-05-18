@@ -38,15 +38,25 @@ class _FakeModel:
     """Returns counts from a queue, falling back to ``default`` when
     the queue is empty.
 
-    Implements both ``count`` (single-noun) and ``count_batch`` (the
-    multi-noun fast path the watcher actually uses). ``count_batch``
-    loops through ``count`` so per-noun call accounting still works
-    in tests.
+    Implements every shape the watcher consumes:
+      * ``count`` (single-noun integer)
+      * ``count_batch`` (multi-noun integers in one call)
+      * ``detect_boxes`` (single-noun → list of synthetic boxes,
+        one per integer in the count, spaced so they don't overlap
+        intra-class but DO overlap cross-class for whatever you
+        want to test).
+
+    Each ``detect_boxes`` call generates non-overlapping unit boxes
+    in the top-left grid; tests that need cross-class overlap
+    should set ``box_overrides[noun]`` to a hand-crafted list.
     """
 
     counts: list[int] = field(default_factory=list)
     default: int = 0
     calls: list[tuple[bytes, str]] = field(default_factory=list)
+    box_overrides: dict[str, list[tuple[int, int, int, int]]] = field(
+        default_factory=dict,
+    )
 
     def count(self, image: bytes, noun: str) -> int:
         self.calls.append((image, noun))
@@ -54,6 +64,14 @@ class _FakeModel:
 
     def count_batch(self, image: bytes, nouns: list[str]) -> dict[str, int]:
         return {noun: self.count(image, noun) for noun in nouns}
+
+    def detect_boxes(self, image: bytes, noun: str) -> list[tuple[int, int, int, int]]:
+        self.calls.append((image, noun))
+        if noun in self.box_overrides:
+            return list(self.box_overrides[noun])
+        n = self.counts.pop(0) if self.counts else self.default
+        # Non-overlapping 10x10 boxes laid out left-to-right at y=0.
+        return [(0, i * 20, 10, i * 20 + 10) for i in range(n)]
 
 
 @pytest.mark.asyncio
@@ -188,6 +206,11 @@ async def test_watcher_survives_model_exception(tmp_path) -> None:
         def count_batch(self, image: bytes, nouns: list[str]) -> dict[str, int]:
             raise RuntimeError("model misfire")
 
+        def detect_boxes(
+            self, image: bytes, noun: str,
+        ) -> list[tuple[int, int, int, int]]:
+            raise RuntimeError("model misfire")
+
     camera = _FakeCamera()
     watcher = VisionWatcher(
         catalog_active_item=services.catalog.get_active_item,
@@ -205,3 +228,66 @@ async def test_watcher_survives_model_exception(tmp_path) -> None:
     assert watcher.status.consecutive_failures >= 1
     # Inventory remains at the initial count — no bogus write.
     assert services.inventory.get_physical_count(item.id) == 6
+
+
+# ─── Cross-class dedup ─────────────────────────────────────────────
+
+
+def test_cross_class_nms_drops_smaller_overlapping_box() -> None:
+    """Same physical fruit claimed by two classes — the smaller
+    box loses so we don't double-count.
+
+    Real-world failure mode: PaliGemma's ``detect banana`` draws
+    a box around an apple while ``detect apple`` also draws one
+    on the same fruit. Without cross-class dedup, banana count
+    gets a phantom +1.
+    """
+
+    from fruit_market.vision.watcher import _cross_class_nms
+
+    per_class = {
+        "apple": [(0, 0, 100, 100)],   # large, correct apple box
+        "banana": [(5, 5, 95, 95)],    # smaller box ~80% inside the apple
+    }
+    deduped = _cross_class_nms(per_class, iou_threshold=0.5)
+    # Apple's larger box survives; banana's phantom box is dropped.
+    assert deduped["apple"] == [(0, 0, 100, 100)]
+    assert deduped["banana"] == []
+
+
+def test_cross_class_nms_keeps_distinct_fruits_in_different_regions() -> None:
+    """Apple in one corner, banana in the other — both must survive."""
+
+    from fruit_market.vision.watcher import _cross_class_nms
+
+    per_class = {
+        "apple": [(0, 0, 100, 100)],
+        "banana": [(200, 200, 300, 300)],
+    }
+    deduped = _cross_class_nms(per_class, iou_threshold=0.5)
+    assert len(deduped["apple"]) == 1
+    assert len(deduped["banana"]) == 1
+
+
+def test_cross_class_nms_handles_multiple_overlaps() -> None:
+    """3 apples + 3 bananas with 1 cross-class overlap should leave
+    3 apples + 2 bananas (the overlapping banana box, being smaller,
+    drops)."""
+
+    from fruit_market.vision.watcher import _cross_class_nms
+
+    per_class = {
+        "apple": [
+            (0, 0, 100, 100),       # apple A
+            (0, 200, 100, 300),     # apple B
+            (0, 400, 100, 500),     # apple C
+        ],
+        "banana": [
+            (5, 5, 95, 95),         # claimed banana, but on apple A — DROP
+            (200, 0, 280, 80),      # genuine banana D
+            (200, 200, 280, 280),   # genuine banana E
+        ],
+    }
+    deduped = _cross_class_nms(per_class, iou_threshold=0.5)
+    assert len(deduped["apple"]) == 3
+    assert len(deduped["banana"]) == 2

@@ -39,6 +39,84 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Cross-class IoU threshold. Two boxes from different classes that
+# overlap by 50%+ of their union refer to the same physical object
+# — PaliGemma claimed it as two classes, only one can be right, so
+# we drop the smaller one. 0.5 matches the standard COCO threshold;
+# tune via FM_VISION_CROSS_CLASS_IOU if needed.
+_CROSS_CLASS_IOU = float(os.environ.get("FM_VISION_CROSS_CLASS_IOU", "0.5"))
+
+
+def _box_iou(
+    a: tuple[int, int, int, int],
+    b: tuple[int, int, int, int],
+) -> float:
+    """IoU between two ``(y0, x0, y1, x1)`` boxes."""
+
+    ay0, ax0, ay1, ax1 = a
+    by0, bx0, by1, bx1 = b
+    iy0, ix0 = max(ay0, by0), max(ax0, bx0)
+    iy1, ix1 = min(ay1, by1), min(ax1, bx1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    if inter == 0:
+        return 0.0
+    area_a = (ay1 - ay0) * (ax1 - ax0)
+    area_b = (by1 - by0) * (bx1 - bx0)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _cross_class_nms(
+    per_class_boxes: dict[str, list[tuple[int, int, int, int]]],
+    iou_threshold: float,
+) -> dict[str, list[tuple[int, int, int, int]]]:
+    """Drop boxes that overlap with another class's boxes.
+
+    For each pair of overlapping cross-class boxes (IoU above the
+    threshold), the smaller box loses — larger area is a rough
+    proxy for "the class the model was more confident about for
+    this spatial region." This fixes the failure mode where
+    PaliGemma's ``detect banana`` draws a box around an apple:
+    when ``detect apple`` also drew a box there, the apple box
+    is usually tighter/larger, so the banana box drops.
+
+    Returns a new dict with the surviving boxes per class.
+    """
+
+    # Flatten to a list of (class_name, box_index, box) so we can
+    # mark losers by (class, index) without mutating mid-iteration.
+    flat: list[tuple[str, int, tuple[int, int, int, int]]] = []
+    for name, boxes in per_class_boxes.items():
+        for idx, box in enumerate(boxes):
+            flat.append((name, idx, box))
+
+    losers: set[tuple[str, int]] = set()
+    for i, (name_a, idx_a, box_a) in enumerate(flat):
+        if (name_a, idx_a) in losers:
+            continue
+        area_a = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+        for name_b, idx_b, box_b in flat[i + 1 :]:
+            if name_a == name_b:
+                continue  # intra-class already deduped at the model layer
+            if (name_b, idx_b) in losers:
+                continue
+            if _box_iou(box_a, box_b) < iou_threshold:
+                continue
+            area_b = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+            # Smaller box loses. Ties broken alphabetically by class
+            # for determinism.
+            if area_a < area_b or (area_a == area_b and name_a > name_b):
+                losers.add((name_a, idx_a))
+                break  # we lost — stop checking against others
+            losers.add((name_b, idx_b))
+
+    return {
+        name: [box for idx, box in enumerate(boxes) if (name, idx) not in losers]
+        for name, boxes in per_class_boxes.items()
+    }
+
+
 @dataclass
 class WatcherStatus:
     running: bool = False
@@ -172,12 +250,16 @@ class VisionWatcher:
         # (the model occasionally sees 3 fruits as 4 when one is
         # partially occluded). Trade-off: one extra tick of latency
         # before count changes propagate.
-        #   N=1 → write every tick (no smoothing, was the old behavior)
-        #   N=2 → write after the count repeats once (~1.5 s extra latency)
-        #   N=3 → very conservative; only write on rock-solid 3-in-a-row
-        # Override with FM_VISION_STABILITY_TICKS.
+        #
+        # Default N=1 (write every tick) because the cross-class
+        # dedup in the tick handler already kills the dominant
+        # noise source (PaliGemma's "apple sometimes called
+        # banana"). Smoothing here was masking the symptom and
+        # making the kiosk feel laggy on real fruit moves. Bump
+        # to 2+ via FM_VISION_STABILITY_TICKS if a particular
+        # camera/lighting combo still flickers.
         self._stability_ticks = max(
-            1, int(os.environ.get("FM_VISION_STABILITY_TICKS", "2"))
+            1, int(os.environ.get("FM_VISION_STABILITY_TICKS", "1"))
         )
         # Per-item rolling buffer of the last N model reads — the
         # value the watcher commits to inventory is the latest read
@@ -279,39 +361,33 @@ class VisionWatcher:
         self.status.last_skipped_motion = False
         self._previous_frame = frame
 
-        # One model call PER ITEM (not batched). PaliGemma's multi-
-        # noun ``detect apple ; banana`` prompt loses per-class
-        # precision vs separate single-noun prompts — the model
-        # has to localize multiple classes simultaneously and tends
-        # to mislabel one class as another on a cluttered scene,
-        # producing visibly flickering counts on the kiosk.
-        #
-        # Per-item calls give the model its full attention on one
-        # noun at a time, with the same `count_batch` model wrapper
-        # available behind an env flag if the operator wants the
-        # ~0.8 s/tick speedup (FM_VISION_BATCH_DETECT=1) at the
-        # cost of accuracy. The batched path is also still useful
-        # for benchmarks that want raw inference throughput.
+        # One detect call PER ITEM, then CROSS-CLASS dedup before
+        # we count boxes. This fixes the "apple sometimes counted
+        # as banana" failure mode: PaliGemma's ``detect banana``
+        # will occasionally draw a box around an apple, and intra-
+        # class NMS can't catch that (the box doesn't overlap with
+        # other "banana" boxes). Cross-class dedup catches it by
+        # noticing the same physical region is claimed by both
+        # ``detect apple`` and ``detect banana`` and keeping only
+        # the larger box (a proxy for "the class that saw it
+        # more confidently").
         change_ts = time.time()
-        nouns = [item.name for item in items_to_count]
-        use_batch = os.environ.get("FM_VISION_BATCH_DETECT", "0").strip() == "1"
-        batch: dict[str, int] = {}
-        if use_batch:
+        per_class_boxes: dict[str, list[tuple[int, int, int, int]]] = {}
+        for item in items_to_count:
             try:
-                batch = await loop.run_in_executor(
-                    None, self._model.count_batch, frame, nouns
+                per_class_boxes[item.name] = await loop.run_in_executor(
+                    None, self._model.detect_boxes, frame, item.name
                 )
             except Exception:
-                logger.exception("model count_batch failed for %r", nouns)
-                batch = {}
-        else:
-            for item in items_to_count:
-                try:
-                    batch[item.name] = await loop.run_in_executor(
-                        None, self._model.count, frame, item.name
-                    )
-                except Exception:
-                    logger.exception("model count failed for %r", item.name)
+                logger.exception("model detect failed for %r", item.name)
+                # Don't put a key in per_class_boxes for failures;
+                # the stability buffer for this noun stays unchanged
+                # and the count stays at its previous committed value.
+
+        # Cross-class dedup: drop boxes that overlap (IoU >= 0.5)
+        # across classes. Keep the larger box in any conflict.
+        deduped = _cross_class_nms(per_class_boxes, _CROSS_CLASS_IOU)
+        batch: dict[str, int] = {name: len(boxes) for name, boxes in deduped.items()}
 
         # Now iterate items to update inventory + activity. We
         # preserve the per-item failure tolerance: a missing noun
