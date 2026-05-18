@@ -20,16 +20,20 @@ import json
 from dataclasses import dataclass, field
 from typing import Literal
 
-# Canonical action names. Mirrored on the firmware as
-# ``ACTION_KEY_TO_NAME.values()``. Add a new action by adding it
-# here AND in apps/pico/main.py — both sides must agree.
+# Canonical action names emitted by the firmware. Mirrored as
+# ``ACTION_KEY_TO_NAME.values()`` in apps/pico/main.py — both sides
+# must agree. ONLY the top row of the keypad emits buttons, so this
+# list is intentionally short: four actions, one per top-row key.
+#
+# The HTTP layer (``/api/pico/action``) still accepts additional
+# action names (``count_now``, ``confirm``) for direct curl-based
+# diagnostics, but the firmware will never emit them — they're
+# no longer wired to physical keys.
 ACTION_NAMES: tuple[str, ...] = (
-    "confirm",      # confirm pending teach proposal
-    "packed",       # mark most-recent paid order packed
-    "cancel",       # cancel most-recent reservation
-    "count_now",    # force a vision recount past the motion gate
-    "supply_buy",   # confirm pending supplier purchase
-    "ready",        # operator ack / "I'm here, refresh state"
+    "ready",        # row-0 key 0: open the store / mark shelf confirmed
+    "packed",       # row-0 key 1: mark most-recent paid order packed
+    "cancel",       # row-0 key 2: cancel reservation or pending restock
+    "supply_buy",   # row-0 key 3: approve PaySponge supplier payment
 )
 
 # Allowed values for each health field. ``unknown`` is the default

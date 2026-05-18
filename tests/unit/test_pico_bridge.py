@@ -50,16 +50,14 @@ def test_api_state_to_payload_tolerates_missing_fields() -> None:
     assert payload.active_item == ""
     assert payload.active_count == 0
     # ``ready`` defaults to attention=True when demo_active isn't
-    # set (the operator hasn't pressed READY yet). The other five
+    # set (the operator hasn't pressed READY yet). The other three
     # action keys default to attention=False because nothing is
-    # pending.
+    # pending. Only four keys are emit-capable now (top row).
     assert payload.attention == {
         "ready": True,
         "packed": False,
         "cancel": False,
         "supply_buy": False,
-        "count_now": False,
-        "confirm": False,
     }
     assert payload.health == {"camera": "unknown", "model": "unknown", "phone": "unknown"}
     # New fields default safely.
@@ -102,6 +100,9 @@ def test_api_state_to_payload_flags_payment_pending_on_reservation() -> None:
 
 
 def test_api_state_to_payload_maps_pending_to_attention() -> None:
+    """Only the four emit-capable top-row keys carry attention now —
+    teach_proposal is no longer surfaced on the keypad."""
+
     api_state = {
         "active_item_id": "i",
         "catalog": [],
@@ -113,10 +114,12 @@ def test_api_state_to_payload_maps_pending_to_attention() -> None:
         },
     }
     payload = api_state_to_payload(api_state)
-    assert payload.attention["confirm"] is True
     assert payload.attention["packed"] is True
     assert payload.attention["cancel"] is True
     assert payload.attention["supply_buy"] is True
+    # ``confirm`` is no longer a keypad action; teach confirmation
+    # is a kiosk-only flow now.
+    assert "confirm" not in payload.attention
 
 
 def test_api_state_to_payload_maps_restock_status_and_cancel_attention() -> None:
@@ -314,7 +317,7 @@ def test_bridge_dispatches_button_event_to_api(monkeypatch) -> None:
     api = _FakeApi()
     bridge = _build_bridge(serial_obj, api)
     serial_obj.queue_line(
-        b'{"event":"button","button":1,"action":"confirm"}'
+        b'{"event":"button","button":1,"action":"ready"}'
     )
 
     bridge.start()
@@ -324,7 +327,7 @@ def test_bridge_dispatches_button_event_to_api(monkeypatch) -> None:
         time.sleep(0.02)
     bridge.stop()
 
-    assert api.actions_posted == ["confirm"]
+    assert api.actions_posted == ["ready"]
 
 
 def test_bridge_pushes_state_to_serial_on_change(monkeypatch) -> None:

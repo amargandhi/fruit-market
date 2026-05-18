@@ -19,8 +19,8 @@ Keypad layout (4x4, indices 0-15 left-to-right, top-to-bottom):
     | 0 READY     | 1 PACKED    | 2 CANCEL    | 3 SUPPLY_BUY    |
     |   (green)   |   (amber)   |   (red)     |   (cyan)        |
     +-------------+-------------+-------------+-----------------+
-    | 4 call act. | 5 payment   | 6 COUNT_NOW | 7 CONFIRM       |
-    |   (blue)    |   (gold)    |   (violet)  |   (light green) |
+    | 4 call act. | 5 payment   | 6 (reserved)| 7 (reserved)    |
+    |   (blue)    |   (gold)    |             |                 |
     +-------------+-------------+-------------+-----------------+
     | 8 apples    | 9 bananas   |10 reserved  |11 paid/packed   |
     |   (red)     |   (yellow)  |   (purple)  |   (green)       |
@@ -29,21 +29,20 @@ Keypad layout (4x4, indices 0-15 left-to-right, top-to-bottom):
     |   (blue)    |   (violet)  |   (magenta) |   (red)         |
     +-------------+-------------+-------------+-----------------+
 
-Row 0 -- primary demo actions. These are the four keys the
-operator touches during a live run:
+ONLY the top row emits button events. Every other key is visual-
+only -- a stray finger on rows 1-3 never triggers anything.
+
+Row 0 actions:
     READY      -> open the store / mark shelf confirmed
     PACKED     -> confirm pack of next paid order
     CANCEL     -> cancel reservation or pending restock
     SUPPLY_BUY -> approve PaySponge supplier payment
 
-Row 1 -- secondary actions + status indicators:
-    keys 4 + 5 are visual-only (call active, payment pending)
-    COUNT_NOW (6)  -> force a vision recount past the motion gate
-    CONFIRM   (7)  -> confirm a pending teach proposal
+Rows 1-3: purely visual indicators. Driven by host state pushes;
+they never fire events. See the paint_* functions below for what
+each cell shows.
 
-Rows 2 + 3 -- purely visual. Never emit events on press.
-
-Action keys (0, 1, 2, 3, 6, 7) always emit on press regardless of
+Action keys (0, 1, 2, 3) always emit on press regardless of
 whether the backend has anything pending -- the backend decides
 what to do (returns ``status="no_pending"`` if there is nothing to
 act on). This keeps the keypad feeling alive: every press gets a
@@ -83,11 +82,12 @@ KEY_PACKED = 1
 KEY_CANCEL = 2
 KEY_SUPPLY_BUY = 3
 
-# Row 1 -- secondary actions + status
+# Row 1 -- visual indicators only (no buttons)
 KEY_CALL_ACTIVE = 4
 KEY_PAYMENT = 5
-KEY_COUNT_NOW = 6
-KEY_CONFIRM = 7
+# Cells 6 and 7 are reserved for future indicators; currently
+# painted dark. (Removed from the action set so a row-1 press
+# never emits.)
 
 # Row 2 -- item + order status
 KEY_APPLE = 8
@@ -101,17 +101,16 @@ KEY_MODEL = 13
 KEY_PHONE = 14
 KEY_ERROR = 15
 
-# Indices that emit button events; presses on other keys are ignored.
-# Order matches the demo flow: READY first (opens the store),
-# PACKED + SUPPLY_BUY are the during-demo actions, CANCEL is the
-# escape hatch. COUNT_NOW + CONFIRM are secondary.
+# Indices that emit button events. ONLY the top row -- presses on
+# rows 1-3 are silently ignored so a stray finger on a status
+# indicator can never fire a real action. Order matches the demo
+# flow: READY opens the store, PACKED + SUPPLY_BUY are the
+# during-demo actions, CANCEL is the escape hatch.
 ACTION_KEY_TO_NAME = {
     KEY_READY: "ready",
     KEY_PACKED: "packed",
     KEY_CANCEL: "cancel",
     KEY_SUPPLY_BUY: "supply_buy",
-    KEY_COUNT_NOW: "count_now",
-    KEY_CONFIRM: "confirm",
 }
 
 # Color palette. Brightness is kept modest so the keypad is readable
@@ -138,8 +137,6 @@ ACTION_BASE_COLOR = {
     KEY_PACKED:     COLOR_AMBER,
     KEY_CANCEL:     COLOR_RED,
     KEY_SUPPLY_BUY: COLOR_CYAN,
-    KEY_COUNT_NOW:  COLOR_VIOLET,
-    KEY_CONFIRM:    COLOR_GREEN_SOFT,
 }
 
 HEALTH_COLORS = {
@@ -174,8 +171,6 @@ state = {
         "packed":     False,
         "cancel":     False,
         "supply_buy": False,
-        "count_now":  False,
-        "confirm":    False,
     },
     "health": {
         "camera": "unknown",
@@ -333,8 +328,6 @@ def paint_attention(ts):
     if attention.get("supply_buy"):
         # Fastest breathe -- money-moving action, highest urgency.
         set_pad(KEY_SUPPLY_BUY, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 380))
-    if attention.get("confirm"):
-        set_pad(KEY_CONFIRM, breathe(COLOR_GREEN_SOFT, scale(COLOR_GREEN_SOFT, 10), ts, 600))
 
 
 def paint_active_fruit(ts):

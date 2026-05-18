@@ -343,13 +343,15 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
     # demo_active flips on operator's READY press; light READY
     # only when the operator HASN'T pressed it yet.
     demo_active = bool(state.get("demo_active"))
+    # Only the four top-row keys can demand attention now — keys 4-15
+    # are visual-only and never emit. A pending teach proposal
+    # routes through CANCEL/CONFIRM via the kiosk; the keypad
+    # doesn't surface it.
     attention = {
         "ready": not demo_active,
         "packed": bool(pending_dict.get("paid_order")),
         "cancel": bool(pending_dict.get("reservation")) or supply_buy_pending,
         "supply_buy": supply_buy_pending,
-        "count_now": False,
-        "confirm": bool(pending_dict.get("teach_proposal")),
     }
 
     health = state.get("health") or {}

@@ -41,7 +41,9 @@ def test_serialize_state_round_trips() -> None:
         assert name in parsed["attention"]
     assert parsed["attention"]["packed"] is True
     assert parsed["attention"]["supply_buy"] is True
-    assert parsed["attention"]["confirm"] is False  # absent → defaulted
+    # ``cancel`` is one of the four top-row actions; absent in the
+    # input dict → defaulted to False on the wire.
+    assert parsed["attention"]["cancel"] is False
     # All three health fields present.
     assert parsed["health"]["camera"] == "ok"
     assert parsed["health"]["model"] == "warmup"
@@ -88,9 +90,9 @@ def test_parse_button_event() -> None:
 
 
 def test_parse_button_event_accepts_bytes() -> None:
-    event = parse_event_line(b'{"event":"button","button":1,"action":"confirm"}')
+    event = parse_event_line(b'{"event":"button","button":1,"action":"ready"}')
     assert isinstance(event, PicoButtonEvent)
-    assert event.action == "confirm"
+    assert event.action == "ready"
 
 
 def test_parse_hello_event() -> None:

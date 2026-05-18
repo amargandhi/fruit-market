@@ -100,8 +100,8 @@ can run the stall without looking at a screen.
 | 0 READY     | 1 PACKED    | 2 CANCEL    | 3 SUPPLY_BUY    |
 |   green     |   amber     |   red       |   cyan          |
 +-------------+-------------+-------------+-----------------+
-| 4 call act. | 5 payment   | 6 COUNT_NOW | 7 CONFIRM       |
-|   blue      |   gold      |   violet    |   light green   |
+| 4 call act. | 5 payment   | 6 (reserved)| 7 (reserved)    |
+|   blue      |   gold      |             |                 |
 +-------------+-------------+-------------+-----------------+
 | 8 apples    | 9 bananas   |10 reserved  |11 paid/packed   |
 |   red       |   yellow    |   purple    |   green         |
@@ -120,12 +120,18 @@ can run the stall without looking at a screen.
 | **2 CANCEL** | Cancel reservation OR restock | An order is stuck or a restock needs rejecting. Stock returns to inventory. |
 | **3 SUPPLY_BUY** | Approve restock payment | The cyan key is breathing fast amber — a supplier basket is staged, press to pay PaySponge. |
 
-**Row 1 — secondary actions + status indicators (only paint on
-active event; OFF otherwise):**
-- **4 (visual)** blue breathe ONLY during a live phone call
-- **5 (visual)** gold breathe ONLY while customer is mid-checkout
-- **6 COUNT_NOW** — force a vision recount past the motion gate (diagnostic)
-- **7 CONFIRM** — confirm a pending teach proposal (rare in the auto-seeded demo)
+**Row 1 — visual indicators only (no buttons, OFF unless an event
+is in flight):**
+- **4** blue breathe ONLY during a live phone call
+- **5** gold breathe ONLY while customer is mid-checkout
+- **6** reserved — currently dark
+- **7** reserved — currently dark
+
+> Only the **four top-row keys** emit button events. Keys 4-15 are
+> visual-only — a stray finger on any of them never triggers an
+> action. (`count_now` and `confirm` are still callable via curl on
+> `/api/pico/action` for diagnostics, but they're not wired to
+> physical keys anymore.)
 
 **Row 2 — active fruit cell + order status (event-driven):**
 - 8 (apple) / 9 (banana): the active fruit glows softly. When the
