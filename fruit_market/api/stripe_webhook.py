@@ -27,8 +27,6 @@ async def handle_stripe_webhook(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=401, detail="invalid signature") from exc
 
     event_type = event["type"]
-    if event_type not in {"checkout.session.completed", "payment_intent.succeeded"}:
-        return {"status": "ignored"}
 
     obj = stripe_checkout.event_data_object(event)
     metadata = obj.get("metadata", {})
@@ -38,6 +36,28 @@ async def handle_stripe_webhook(request: Request) -> dict[str, str]:
         return {"status": "ignored"}
 
     services = get_services(request)
+
+    # Failure paths first — these used to be silently ignored, which
+    # meant the operator never heard about a declined card or an
+    # expired checkout session. Now we cancel the reservation (so
+    # the held stock returns) and SMS the operator.
+    failure_events = {
+        "checkout.session.expired":     "expired",
+        "checkout.session.async_payment_failed": "async_payment_failed",
+        "payment_intent.payment_failed": "payment_failed",
+        "charge.failed":                 "charge_failed",
+    }
+    if event_type in failure_events:
+        _handle_failed_checkout(
+            services,
+            order_id,
+            failure_events[event_type],
+        )
+        return {"status": "ok"}
+
+    if event_type not in {"checkout.session.completed", "payment_intent.succeeded"}:
+        return {"status": "ignored"}
+
     order_before = services.orders.get(order_id)
     if order_before is None:
         return {"status": "ignored"}
@@ -51,6 +71,55 @@ async def handle_stripe_webhook(request: Request) -> dict[str, str]:
     if order is not None:
         _notify_after_payment(services, order, obj)
     return {"status": "ok"}
+
+
+def _handle_failed_checkout(
+    services: Services,
+    order_id: str,
+    failure_reason: str,
+) -> None:
+    """Release held stock + tell the operator a payment failed."""
+
+    order = services.orders.get(order_id)
+    if order is None:
+        return
+    if order.status != "reserved":
+        # Already paid, packed, or cancelled — nothing to do here.
+        return
+    item = services.catalog.get_item(order.item_id)
+    item_name = item.name if item is not None else order.item_id
+
+    try:
+        services.orders.cancel(order_id, "customer_request")
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "stripe %s but order cancel failed for %s", failure_reason, order_id,
+        )
+        return
+
+    logger.warning(
+        "stripe %s — released %d %s reservation %s",
+        failure_reason, order.qty, item_name, order_id,
+    )
+
+    operator_phone = os.environ.get("OPERATOR_PHONE", "").strip()
+    send_mode = os.environ.get("AGENTPHONE_SEND_MODE", "").strip().lower()
+    if operator_phone and send_mode == "live":
+        try:
+            from fruit_market.integrations.agentphone import send_sms  # noqa: PLC0415
+
+            send_sms(
+                operator_phone,
+                (
+                    f"Fruit Market: Stripe {failure_reason} for order {order_id} "
+                    f"({_quantity_label(order.qty, item_name)}). Reservation released."
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "failed to text operator about Stripe %s for %s",
+                failure_reason, order_id,
+            )
 
 
 def _notify_after_payment(

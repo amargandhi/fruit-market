@@ -331,6 +331,32 @@ class RestockCoordinator:
                 reason=reason,
             )
         )
+        # Tell the operator out-of-band so a silent payment failure
+        # at PaySponge / supplier doesn't sit in the event log
+        # unnoticed for the rest of the demo. Email is opportunistic;
+        # SMS is louder and goes to the operator's phone immediately.
+        self._notify_failure(proposal_id, stage, reason)
+
+    def _notify_failure(self, proposal_id: str, stage: str, reason: str) -> None:
+        to_phone = self._settings.operator_phone
+        if not to_phone:
+            return
+        try:
+            from fruit_market.integrations.agentphone import send_sms  # noqa: PLC0415
+
+            if os.environ.get("AGENTPHONE_SEND_MODE", "").strip().lower() != "live":
+                return
+            send_sms(
+                to_phone,
+                (
+                    f"Fruit Market restock {proposal_id} FAILED at {stage}: "
+                    f"{reason[:120]}"
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "failed to notify operator about restock failure %s", proposal_id,
+            )
 
     def _is_expired(self, record: RestockRecord) -> bool:
         try:
