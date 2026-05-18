@@ -260,26 +260,46 @@ class VisionWatcher:
         self.status.last_skipped_motion = False
         self._previous_frame = frame
 
-        # One BATCH model call for all items — PaliGemma's detect
-        # task accepts ``apple ; banana`` and returns per-noun boxes
-        # in a single forward pass. Cuts tick latency roughly in
-        # half vs the previous per-item loop.
+        # One model call PER ITEM (not batched). PaliGemma's multi-
+        # noun ``detect apple ; banana`` prompt loses per-class
+        # precision vs separate single-noun prompts — the model
+        # has to localize multiple classes simultaneously and tends
+        # to mislabel one class as another on a cluttered scene,
+        # producing visibly flickering counts on the kiosk.
+        #
+        # Per-item calls give the model its full attention on one
+        # noun at a time, with the same `count_batch` model wrapper
+        # available behind an env flag if the operator wants the
+        # ~0.8 s/tick speedup (FM_VISION_BATCH_DETECT=1) at the
+        # cost of accuracy. The batched path is also still useful
+        # for benchmarks that want raw inference throughput.
         change_ts = time.time()
         nouns = [item.name for item in items_to_count]
-        try:
-            batch = await loop.run_in_executor(
-                None, self._model.count_batch, frame, nouns
-            )
-        except Exception:
-            logger.exception("model count_batch failed for %r", nouns)
-            batch = {}
+        use_batch = os.environ.get("FM_VISION_BATCH_DETECT", "0").strip() == "1"
+        batch: dict[str, int] = {}
+        if use_batch:
+            try:
+                batch = await loop.run_in_executor(
+                    None, self._model.count_batch, frame, nouns
+                )
+            except Exception:
+                logger.exception("model count_batch failed for %r", nouns)
+                batch = {}
+        else:
+            for item in items_to_count:
+                try:
+                    batch[item.name] = await loop.run_in_executor(
+                        None, self._model.count, frame, item.name
+                    )
+                except Exception:
+                    logger.exception("model count failed for %r", item.name)
 
         # Now iterate items to update inventory + activity. We
-        # preserve the per-item failure tolerance from the previous
-        # loop: a missing noun in the batch result just means the
-        # model saw zero of it (detect returns no boxes for absent
-        # objects). A wholesale batch failure leaves all items
-        # untouched and falls into the "no counts" branch below.
+        # preserve the per-item failure tolerance: a missing noun
+        # in the result just means the model saw zero of it
+        # (detect returns no boxes for absent objects). A wholesale
+        # batch failure leaves all items untouched and falls into
+        # the "no counts" branch below.
         counts: dict[str, int] = {}
         for item in items_to_count:
             if item.name not in batch:
