@@ -89,6 +89,8 @@ class PicoStatePayload:
     pipeline (see ``apps/pico/main.py`` for the per-layer paint
     functions):
       * ``active_item`` → glows the matching row-2 fruit cell.
+      * ``fruit_status`` → per-fruit active/low/out status for the
+        lower-grid dashboard cells.
       * ``order_status`` → row-2 cells 10 (reservation) + 11 (paid).
       * ``call_active`` / ``payment_pending`` → row-1 indicators.
       * ``restock_status`` → row-0 SUPPLY_BUY animation phase.
@@ -104,6 +106,7 @@ class PicoStatePayload:
     active_item: str = ""
     active_count: int = 0
     active_low: bool = False
+    fruit_status: dict[str, dict[str, object]] = field(default_factory=dict)
     order_status: str = ""           # "" | reserved | paid | packed | cancelled
     call_active: bool = False
     payment_pending: bool = False
@@ -124,11 +127,16 @@ class PicoStatePayload:
             field_name: _coerce_health(self.health.get(field_name, "unknown"))
             for field_name in ("camera", "model", "phone")
         }
+        fruit_status = {
+            fruit: _coerce_fruit_status(self.fruit_status.get(fruit, {}))
+            for fruit in ("apple", "banana")
+        }
         return {
             "event": "state",
             "active_item": self.active_item or "",
             "active_count": max(0, int(self.active_count)),
             "active_low": bool(self.active_low),
+            "fruit_status": fruit_status,
             "order_status": str(self.order_status or ""),
             "call_active": bool(self.call_active),
             "payment_pending": bool(self.payment_pending),
@@ -153,6 +161,26 @@ def serialize_state(payload: PicoStatePayload) -> bytes:
 def _coerce_health(value: str) -> str:
     v = (value or "unknown").strip().lower()
     return v if v in HEALTH_VALUES else "unknown"
+
+
+def _coerce_fruit_status(value: dict[str, object]) -> dict[str, object]:
+    if not isinstance(value, dict):
+        value = {}
+    count_raw = value.get("count", 0)
+    try:
+        # int() will refuse ``object``; narrow to (str, int, float, bool)
+        # before coercion, fall back to 0 on anything weirder.
+        if isinstance(count_raw, str | int | float | bool):
+            count = max(0, int(count_raw or 0))
+        else:
+            count = 0
+    except (TypeError, ValueError):
+        count = 0
+    return {
+        "count": count,
+        "active": bool(value.get("active", False)),
+        "low": bool(value.get("low", False)),
+    }
 
 
 # ─── Firmware → bridge ──────────────────────────────────────────────

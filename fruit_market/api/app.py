@@ -58,7 +58,7 @@ _REQUIRED_ENV_SURVEY: list[tuple[str, str, str]] = [
     ("AGENTPHONE_SEND_MODE", "",           "must be 'live' for steps 13, 25"),
     ("AGENTMAIL_API_KEY",    "",           "operator + customer email (steps 17, 18, 24)"),
     ("AGENTMAIL_ENABLED",    "0",          "must be '1' for steps 17, 18"),
-    ("STRIPE_API_KEY",       "",           "Stripe Checkout sessions (step 12)"),
+    ("STRIPE_SECRET_KEY",    "",           "Stripe Checkout sessions (step 12)"),
     ("STRIPE_WEBHOOK_SECRET","",           "verify /webhooks/stripe (step 15)"),
     ("OPERATOR_EMAIL",       "",           "Stripe paid-order email recipient (step 18)"),
     ("OPERATOR_PHONE",       "",           "restock SMS recipient (step 25)"),

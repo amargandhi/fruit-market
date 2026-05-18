@@ -2,8 +2,9 @@
 
 A Pimoroni RGB Keypad attached to a Pico 2 W gives the stall
 operator a physical, glance-able control surface during the demo.
-Five action keys + a stock gauge + three health LEDs + an error
-strobe.
+The top row is four real actions; the bottom three rows are one
+large same-color visual status block for fruit movement, sales,
+restock, and errors.
 
 ## Hardware
 
@@ -31,8 +32,8 @@ mpremote connect /dev/cu.usbmodem* fs cp apps/pico/main.py :main.py
 mpremote connect /dev/cu.usbmodem* reset
 ```
 
-The keypad lights up in its idle state (dim grey across all 16
-keys) once the firmware is running.
+The keypad lights up once the firmware is running and the bridge
+starts pushing backend state.
 
 ## Protocol
 
@@ -47,8 +48,12 @@ that `mpremote` uses) as newline-delimited JSON.
   "active_item": "banana",
   "active_count": 3,
   "active_low": false,
+  "fruit_status": {
+    "apple": {"count": 4, "active": false, "low": false},
+    "banana": {"count": 3, "active": true, "low": false}
+  },
   "attention": {
-    "confirm": false,
+    "ready": false,
     "packed": true,
     "cancel": false,
     "supply_buy": true
@@ -78,35 +83,38 @@ is alive and which actions it can produce:
 
 ```json
 {"event":"hello","device":"fm-pico-keypad","version":1,
- "actions":["cancel","confirm","count_now","packed","ready","supply_buy"]}
+ "actions":["cancel","packed","ready","supply_buy"]}
 ```
 
 ## Layout
 
 ```
 ┌───────────┬───────────┬───────────┬───────────┐
-│ 1 confirm │ 2 packed  │ 3 cancel  │ 4 count   │
+│ 1 ready   │ 2 packed  │ 3 cancel  │ 4 supply  │
 ├───────────┼───────────┼───────────┼───────────┤
-│ 5 supply  │ 6 ─       │ 7 ─       │ 8 ready   │
+│        bottom 3x4 same-color status block       │
 ├───────────┼───────────┼───────────┼───────────┤
-│ 9 stock   │10 stock   │11 stock   │12 stock   │
+│        solid = steady, pulse/blink = event      │
 ├───────────┼───────────┼───────────┼───────────┤
-│13 cam     │14 model   │15 phone   │16 error   │
+│        green/amber/red/blue/cyan/gold together  │
 └───────────┴───────────┴───────────┴───────────┘
 ```
 
-Buttons 1, 2, 3, 4, 5, 8 emit events. Buttons 6, 7, and all of
-rows 3-4 are display-only — pressing them does nothing, so an
-accidental finger on the table never sends a bogus command.
+Buttons 1-4 emit events. Buttons 5-16 are display-only — pressing
+them does nothing, so an accidental finger on the table never
+sends a bogus command.
 
-- **Button 5 (supply)** breathes teal when the host sets
-  `attention.supply_buy = true` (e.g. inventory hit zero and the
-  restock agent is asking to confirm a purchase). Press to ack.
-- **Buttons 1, 2, 3** breathe in their action color when there's
-  something to do (a pending teach proposal / paid order /
-  reservation respectively).
-- **Button 8 (ready)** always emits; useful as an "I'm here, send
-  me the latest state" tap.
+- **Button 1 (ready)** pulses green until the operator opens the store.
+- **Button 2 (packed)** pulses amber when a paid order is waiting.
+- **Button 3 (cancel)** pulses red for a cancellable reservation or restock.
+- **Button 4 (supply)** pulses amber when a restock approval is pending.
+- **Bottom 3x4 blue solid** means open/steady.
+- **Bottom 3x4 green pulse** means fruit added or sold/paid.
+- **Bottom 3x4 amber pulse** means fruit removed, low stock, or restock pending.
+- **Bottom 3x4 gold pulse** means checkout/payment pending.
+- **Bottom 3x4 cyan pulse** means restock payment is in progress.
+- **Bottom 3x4 red blink** means out of stock or error.
+- **Bottom 3x4 green solid** means restock/order landed.
 
 ## Smoke test
 
@@ -118,10 +126,11 @@ uv run python -m fruit_market.hardware.pico_bridge --serial /dev/cu.usbmodem*
 
 # in another: simulate a state push directly
 echo '{"event":"state","active_count":3,"active_item":"banana",
+ "fruit_status":{"apple":{"count":4,"active":false,"low":false},
+ "banana":{"count":3,"active":true,"low":false}},
  "attention":{"supply_buy":true},"health":{"camera":"ok","model":"warmup","phone":"mock"}}' \
   | mpremote connect /dev/cu.usbmodem* repl --inject-code='import sys; print(sys.stdin.readline().strip())'
 ```
 
-The keypad should: light 3 of the 4 stock-bar LEDs green, breathe
-the supply key in teal, hold the model health key in pulsing
-amber, and hold camera + phone in green/blue respectively.
+The keypad should breathe the supply key and paint the whole
+bottom 3x4 block one matching status color for the current event.

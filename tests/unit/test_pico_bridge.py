@@ -41,6 +41,16 @@ def test_api_state_to_payload_extracts_active_item_from_catalog() -> None:
     assert payload.active_item == "banana"
     assert payload.active_count == 2
     assert payload.active_low is True
+    assert payload.fruit_status["apple"] == {
+        "count": 7,
+        "active": False,
+        "low": False,
+    }
+    assert payload.fruit_status["banana"] == {
+        "count": 2,
+        "active": True,
+        "low": True,
+    }
     assert payload.attention["supply_buy"] is True
     assert payload.attention["packed"] is False  # not pending
 
@@ -146,7 +156,7 @@ def test_build_flashes_green_pulse_on_added() -> None:
     ]
     flashes = build_flashes(activity, now_epoch_seconds=now)
     assert len(flashes) == 1
-    assert flashes[0].index == 8                   # apple = key 8
+    assert flashes[0].index == 5                   # apple added = key 5
     assert flashes[0].color == (0, 220, 40)        # green
     assert flashes[0].duration_ms == 700
 
@@ -159,7 +169,7 @@ def test_build_flashes_amber_pulse_on_removed_banana() -> None:
     ]
     flashes = build_flashes(activity, now_epoch_seconds=now)
     assert len(flashes) == 1
-    assert flashes[0].index == 9                   # banana = key 9
+    assert flashes[0].index == 10                  # banana removed = key 10
     assert flashes[0].color == (220, 130, 0)       # amber
 
 
@@ -173,6 +183,7 @@ def test_build_flashes_red_strobe_on_out_of_stock() -> None:
     ]
     flashes = build_flashes(activity, now_epoch_seconds=now)
     assert len(flashes) == 1
+    assert flashes[0].index == 11                  # banana out = key 11
     assert flashes[0].color == (220, 0, 0)         # red
     assert flashes[0].duration_ms == 1200          # longest pulse
 
@@ -218,7 +229,7 @@ def test_build_flashes_handles_apple_and_banana_in_one_push() -> None:
     flashes = build_flashes(activity, now_epoch_seconds=now)
     assert len(flashes) == 2
     indices = {f.index for f in flashes}
-    assert indices == {8, 9}
+    assert indices == {5, 10}
 
 
 def test_build_flashes_ignores_unknown_fruit() -> None:

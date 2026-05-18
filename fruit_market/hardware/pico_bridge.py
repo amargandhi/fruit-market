@@ -215,13 +215,25 @@ class ApiClient:
 
 # ─── Count-change flash translation ────────────────────────────────
 #
-# Mapping from fruit name → row-2 cell index on the keypad. Anything
-# not in this table doesn't get a count-change flash (no cell to
-# light up). The active-fruit cell is the one we strobe red when
-# stock hits zero AND the one we pulse green/amber on +1/-1.
-_FRUIT_KEY: dict[str, int] = {
-    "apple":  8,
-    "banana": 9,
+# Mapping from fruit + movement kind → visual-only status cell on the
+# keypad. Top row remains action-only; rows 1-2 are an operator
+# dashboard:
+#
+#   row 1: apple  active | added | removed/sold | out
+#   row 2: banana active | added | removed/sold | out
+#
+# Anything not in this table doesn't get a count-change flash.
+_FRUIT_FLASH_KEY: dict[tuple[str, str], int] = {
+    ("apple", "added"): 5,
+    ("apple", "restocked"): 5,
+    ("apple", "first_seen"): 5,
+    ("apple", "removed"): 6,
+    ("apple", "out"): 7,
+    ("banana", "added"): 9,
+    ("banana", "restocked"): 9,
+    ("banana", "first_seen"): 9,
+    ("banana", "removed"): 10,
+    ("banana", "out"): 11,
 }
 
 # Per-kind RGB colour + duration. Tuned so the eye reads them:
@@ -261,15 +273,17 @@ def build_flashes(
     import time  # noqa: PLC0415
 
     now = now_epoch_seconds if now_epoch_seconds is not None else time.time()
-    seen_keys: set[int] = set()
+    seen_fruits: set[str] = set()
     flashes: list[FlashInstruction] = []
     for entry in activity_entries:
         kind = str(entry.get("kind", "")).lower()
         if kind not in _FLASH_KINDS:
             continue
         item_name = str(entry.get("item_name", "")).lower().rstrip("s")
-        index = _FRUIT_KEY.get(item_name)
-        if index is None or index in seen_keys:
+        if item_name in seen_fruits:
+            continue
+        index = _FRUIT_FLASH_KEY.get((item_name, kind))
+        if index is None:
             continue
         ts = entry.get("ts")
         if not isinstance(ts, int | float):
@@ -278,7 +292,7 @@ def build_flashes(
             continue
         color, duration = _FLASH_KINDS[kind]
         flashes.append(FlashInstruction(index=index, color=color, duration_ms=duration))
-        seen_keys.add(index)
+        seen_fruits.add(item_name)
     return flashes
 
 
@@ -306,10 +320,21 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
     active_name = ""
     active_count = 0
     active_low = False
+    fruit_status: dict[str, dict[str, object]] = {
+        "apple": {"count": 0, "active": False, "low": False},
+        "banana": {"count": 0, "active": False, "low": False},
+    }
     if isinstance(catalog, list):
         for item in catalog:
             if not isinstance(item, dict):
                 continue
+            fruit_name = str(item.get("name", "")).strip().lower().rstrip("s")
+            if fruit_name in fruit_status:
+                fruit_status[fruit_name] = {
+                    "count": int(item.get("physical_count", 0) or 0),
+                    "active": item.get("item_id") == active_item_id,
+                    "low": bool(item.get("is_low", False)),
+                }
             if item.get("item_id") == active_item_id:
                 active_name = str(item.get("name", ""))
                 active_count = int(item.get("physical_count", 0) or 0)
@@ -368,6 +393,7 @@ def api_state_to_payload(state: dict[str, object]) -> PicoStatePayload:
         active_item=active_name,
         active_count=active_count,
         active_low=active_low,
+        fruit_status=fruit_status,
         order_status=order_status,
         # call_active stays False until we wire AgentPhone live-call
         # tracking through /api/state; not in scope for the kiosk

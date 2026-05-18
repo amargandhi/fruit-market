@@ -19,14 +19,14 @@ Keypad layout (4x4, indices 0-15 left-to-right, top-to-bottom):
     | 0 READY     | 1 PACKED    | 2 CANCEL    | 3 SUPPLY_BUY    |
     |   (green)   |   (amber)   |   (red)     |   (cyan)        |
     +-------------+-------------+-------------+-----------------+
-    | 4 call act. | 5 payment   | 6 (reserved)| 7 (reserved)    |
-    |   (blue)    |   (gold)    |             |                 |
+    | 4 apple act.| 5 apple +   | 6 apple -   | 7 apple out     |
+    |   (red)     |   (green)   |   (amber)   |   (red)         |
     +-------------+-------------+-------------+-----------------+
-    | 8 apples    | 9 bananas   |10 reserved  |11 paid/packed   |
-    |   (red)     |   (yellow)  |   (purple)  |   (green)       |
+    | 8 bana. act.| 9 bana. +   |10 bana. -   |11 bana. out     |
+    |   (yellow)  |   (green)   |   (amber)   |   (red)         |
     +-------------+-------------+-------------+-----------------+
-    |12 camera    |13 model     |14 phone     |15 error         |
-    |   (blue)    |   (violet)  |   (magenta) |   (red)         |
+    |12 sold      |13 payment   |14 restock   |15 error         |
+    |   (green)   |   (gold)    |   (cyan)    |   (red)         |
     +-------------+-------------+-------------+-----------------+
 
 ONLY the top row emits button events. Every other key is visual-
@@ -39,8 +39,8 @@ Row 0 actions:
     SUPPLY_BUY -> approve PaySponge supplier payment
 
 Rows 1-3: purely visual indicators. Driven by host state pushes;
-they never fire events. See the paint_* functions below for what
-each cell shows.
+they never fire events. Row 1 is apple state, row 2 is banana
+state, and row 3 is sales/payment/restock/error state.
 
 Action keys (0, 1, 2, 3) always emit on press regardless of
 whether the backend has anything pending -- the backend decides
@@ -82,24 +82,38 @@ KEY_PACKED = 1
 KEY_CANCEL = 2
 KEY_SUPPLY_BUY = 3
 
-# Row 1 -- visual indicators only (no buttons)
-KEY_CALL_ACTIVE = 4
-KEY_PAYMENT = 5
-# Cells 6 and 7 are reserved for future indicators; currently
-# painted dark. (Removed from the action set so a row-1 press
-# never emits.)
+# Row 1 -- apple status indicators only (no buttons)
+KEY_APPLE_ACTIVE = 4
+KEY_APPLE_ADDED = 5
+KEY_APPLE_REMOVED = 6
+KEY_APPLE_OUT = 7
 
-# Row 2 -- item + order status
-KEY_APPLE = 8
-KEY_BANANA = 9
-KEY_RESERVATION = 10
-KEY_PAID = 11
+# Row 2 -- banana status indicators only (no buttons)
+KEY_BANANA_ACTIVE = 8
+KEY_BANANA_ADDED = 9
+KEY_BANANA_REMOVED = 10
+KEY_BANANA_OUT = 11
 
-# Row 3 -- system health
-KEY_CAMERA = 12
-KEY_MODEL = 13
-KEY_PHONE = 14
+# Row 3 -- sales + backend status indicators only (no buttons)
+KEY_SOLD = 12
+KEY_PAYMENT = 13
+KEY_RESTOCK = 14
 KEY_ERROR = 15
+
+STATUS_GRID_KEYS = (
+    KEY_APPLE_ACTIVE,
+    KEY_APPLE_ADDED,
+    KEY_APPLE_REMOVED,
+    KEY_APPLE_OUT,
+    KEY_BANANA_ACTIVE,
+    KEY_BANANA_ADDED,
+    KEY_BANANA_REMOVED,
+    KEY_BANANA_OUT,
+    KEY_SOLD,
+    KEY_PAYMENT,
+    KEY_RESTOCK,
+    KEY_ERROR,
+)
 
 # Indices that emit button events. ONLY the top row -- presses on
 # rows 1-3 are silently ignored so a stray finger on a status
@@ -162,6 +176,10 @@ state = {
     "active_item": "",
     "active_count": 0,
     "active_low": False,
+    "fruit_status": {
+        "apple": {"count": 0, "active": False, "low": False},
+        "banana": {"count": 0, "active": False, "low": False},
+    },
     "order_status": "",          # "" | "reserved" | "paid" | "packed" | "cancelled"
     "call_active": False,
     "payment_pending": False,
@@ -261,19 +279,19 @@ def set_pad(index, color):
 # on the keypad cover -- not by always-on LED glow.
 #
 # Idle steady state (nothing pending, no errors):
-#   * Active fruit cell (apple OR banana): soft glow so the operator
-#     can see "we're tracking this fruit right now."
+#   * Active fruit cell: soft solid glow so the operator can see
+#     what the model is tracking right now.
 #   * READY (key 0): slow pulse green IF the operator hasn't pressed
 #     it yet (invites the first press). OFF after pressed.
 #   * Everything else: OFF.
 #
 # Event-driven highlights (when something is actually happening):
-#   * Count went up    -> green flash on the fruit's row-2 cell
-#   * Count went down  -> amber flash on the fruit's row-2 cell
-#   * Out of stock     -> red strobe on the fruit's row-2 cell
+#   * Count went up    -> green flash on the fruit's "+" cell
+#   * Count went down  -> amber flash on the fruit's "-" cell
+#   * Out of stock     -> red strobe on the fruit's "out" cell
 #   * Paid order ready -> PACKED breathes amber until packed
 #   * Restock pending  -> SUPPLY_BUY breathes fast amber until approved
-#   * System error     -> red blink on the affected health cell + ERROR
+#   * System error     -> red blink on ERROR
 #
 # Count-change flashes are pushed by the bridge as transient
 # overlays (see paint_flashes); the firmware doesn't need to know
@@ -330,103 +348,209 @@ def paint_attention(ts):
         set_pad(KEY_SUPPLY_BUY, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 380))
 
 
-def paint_active_fruit(ts):
-    """Soft glow on whichever fruit the system is tracking right now.
+def paint_status_grid(ts):
+    """Paint rows 1-3 as one same-color video status block.
 
-    Apple OR banana, never both. Brightness depends on count:
-        count > 0  -> dim resting glow (so operator sees "tracking")
-        count == 0 -> red strobe (urgent: out of stock)
-        is_low    -> amber breathe (mild warning)
+    For recording, the bottom 3x4 grid should read from across the
+    room. Instead of tiny per-cell semantics, all twelve visual-only
+    keys share one color and one animation for the highest-priority
+    current event.
     """
 
-    active = (state.get("active_item") or "").lower()
-    if active in ("apple", "apples"):
-        index, color = KEY_APPLE, COLOR_APPLE
-    elif active in ("banana", "bananas"):
-        index, color = KEY_BANANA, COLOR_BANANA
-    else:
-        return
+    mode = "solid"
+    color = COLOR_DIM_GREY
 
-    count = int(state.get("active_count", 0) or 0)
-    if count == 0:
-        # Out of stock -- the headline alarm color.
-        set_pad(index, blink(COLOR_RED, COLOR_OFF, ts, 360))
-    elif state.get("active_low"):
-        set_pad(index, breathe(COLOR_AMBER, scale(COLOR_AMBER, 12), ts, 900))
+    health = state.get("health", {})
+    health_problem = False
+    if isinstance(health, dict):
+        for key in ("camera", "model", "phone"):
+            status = (health.get(key) or "unknown").lower()
+            if status in ("warn", "fail", "error", "down"):
+                health_problem = True
+
+    # Highest priority: backend/device error.
+    if state.get("error_message") or health_problem:
+        mode = "blink"
+        color = COLOR_RED
     else:
-        # Just a quiet "this fruit is the active item" indicator.
-        set_pad(index, scale(color, 18))
+        # Transient fruit movement: bridge pushes green/amber/red
+        # pulses. Any one of those makes the whole bottom grid pulse
+        # the same color for clean video.
+        still_active = []
+        active_color = None
+        for flash in active_flashes:
+            if ts >= flash["until_ms"]:
+                continue
+            active_color = flash["color"]
+            still_active.append(flash)
+        active_flashes[:] = still_active
+        if active_color is not None:
+            mode = "pulse"
+            color = active_color
+        else:
+            apple_count, _apple_active, apple_low = _fruit_info("apple")
+            banana_count, _banana_active, banana_low = _fruit_info("banana")
+            restock_status = str(state.get("restock_status") or "")
+            order_status = (state.get("order_status") or "").lower()
+
+            if _store_is_open() and (apple_count == 0 or banana_count == 0):
+                mode = "blink"
+                color = COLOR_RED
+            elif restock_status == "pending_approval":
+                mode = "pulse"
+                color = COLOR_AMBER
+            elif restock_status in ("approved", "payment_started"):
+                mode = "pulse"
+                color = COLOR_CYAN
+            elif restock_status in ("ordered", "received"):
+                mode = "solid"
+                color = COLOR_GREEN
+            elif state.get("payment_pending") or order_status == "reserved":
+                mode = "pulse"
+                color = COLOR_GOLD
+            elif order_status in ("paid", "packed"):
+                mode = "pulse" if order_status == "paid" else "solid"
+                color = COLOR_GREEN
+            elif apple_low or banana_low:
+                mode = "pulse"
+                color = COLOR_AMBER
+            elif _store_is_open():
+                mode = "solid"
+                color = COLOR_BLUE
+
+    if mode == "blink":
+        painted = blink(color, COLOR_OFF, ts, 320)
+    elif mode == "pulse":
+        painted = breathe(color, scale(color, 10), ts, 520)
+    else:
+        painted = scale(color, 55 if color != COLOR_DIM_GREY else 100)
+
+    for index in STATUS_GRID_KEYS:
+        set_pad(index, painted)
+
+
+def _fruit_info(name):
+    """Return ``(count, active, low)`` for apple/banana.
+
+    New bridge payloads include ``fruit_status`` for both fruits.
+    The active_item fields remain as a fallback so older bridges
+    still light the active cell.
+    """
+
+    fruit_status = state.get("fruit_status", {})
+    info = {}
+    if isinstance(fruit_status, dict):
+        maybe = fruit_status.get(name)
+        if isinstance(maybe, dict):
+            info = maybe
+
+    active_name = (state.get("active_item") or "").lower().rstrip("s")
+    fallback_active = active_name == name
+    try:
+        count = int(info.get("count", state.get("active_count", 0) if fallback_active else 0) or 0)
+    except (TypeError, ValueError):
+        count = 0
+    active = bool(info.get("active", fallback_active))
+    low = bool(info.get("low", state.get("active_low", False) if fallback_active else False))
+    return count, active, low
+
+
+def _store_is_open():
+    attention = state.get("attention", {})
+    if isinstance(attention, dict) and attention.get("ready"):
+        return False
+    return True
+
+
+def paint_fruit_status(ts):
+    """Rows 1-2: apple and banana dashboard cells.
+
+    Per fruit:
+        ACTIVE  -> solid fruit color while the model is tracking it
+        ADDED   -> flash overlay from the bridge when count rises
+        REMOVED -> flash overlay from the bridge when count falls
+        OUT     -> red blink after the store is opened and count is zero
+
+    The added/removed cells are normally dark; flashes paint over
+    this layer in ``paint_flashes``.
+    """
+
+    for name, active_key, out_key, color in (
+        ("apple", KEY_APPLE_ACTIVE, KEY_APPLE_OUT, COLOR_APPLE),
+        ("banana", KEY_BANANA_ACTIVE, KEY_BANANA_OUT, COLOR_BANANA),
+    ):
+        count, active, low = _fruit_info(name)
+        if active:
+            if low and count > 0:
+                set_pad(active_key, breathe(COLOR_AMBER, scale(COLOR_AMBER, 12), ts, 900))
+            else:
+                set_pad(active_key, scale(color, 28))
+
+        if _store_is_open() and count == 0:
+            set_pad(out_key, blink(COLOR_RED, COLOR_OFF, ts, 360))
 
 
 def paint_workflow(ts):
-    """Row 1 + Row 2 indicators only paint on active state.
+    """Row 3 sales/payment indicators only paint on active state.
 
     All of these default to OFF when nothing is happening. Each
     only lights when its specific event is in progress.
     """
 
-    # Row 1: phone-call indicators (rare; only live when AgentPhone
-    # signals an active call or an in-flight checkout).
-    if state.get("call_active"):
-        set_pad(KEY_CALL_ACTIVE, breathe(COLOR_BLUE, scale(COLOR_BLUE, 12), ts, 650))
-    if state.get("payment_pending"):
-        set_pad(KEY_PAYMENT, breathe(COLOR_GOLD, scale(COLOR_GOLD, 12), ts, 520))
-
-    # Row 2 cells 10 + 11: order state. Only paint while an order
-    # is mid-lifecycle.
     order_status = (state.get("order_status") or "").lower()
-    if order_status == "reserved":
-        set_pad(KEY_RESERVATION, breathe(COLOR_PURPLE, scale(COLOR_PURPLE, 12), ts, 700))
-    elif order_status == "paid":
-        set_pad(KEY_PAID, breathe(COLOR_GREEN, scale(COLOR_GREEN, 15), ts, 620))
+    if state.get("payment_pending") or order_status == "reserved":
+        set_pad(KEY_PAYMENT, breathe(COLOR_GOLD, scale(COLOR_GOLD, 12), ts, 520))
+    if order_status == "paid":
+        set_pad(KEY_SOLD, breathe(COLOR_GREEN, scale(COLOR_GREEN, 15), ts, 620))
     elif order_status == "packed":
-        # Briefly solid green so the operator sees "done" before it
-        # fades; cleared on the next state push when the order moves
-        # off the active list.
-        set_pad(KEY_PAID, scale(COLOR_GREEN, 60))
+        # Briefly solid green so the operator sees "sold/packed"
+        # before it fades; cleared on the next state push when the
+        # order moves off the active list.
+        set_pad(KEY_SOLD, scale(COLOR_GREEN, 60))
 
 
 def paint_supply_buy_state(ts):
-    """SUPPLY_BUY (key 3) shows the restock pipeline state.
+    """RESTOCK (key 14) shows the restock pipeline state.
 
     The paint_attention layer handles the "pending_approval" pulse
-    via attention["supply_buy"]. This function handles the
-    POST-approval phases so the operator can see payment fly
-    through and the order land.
+    on the top-row SUPPLY_BUY action key. This visual-only cell
+    shows the restock pipeline phase before and after approval.
     """
 
     status = str(state.get("restock_status") or "")
-    if status in ("approved", "payment_started"):
-        set_pad(KEY_SUPPLY_BUY, breathe(COLOR_CYAN, scale(COLOR_CYAN, 12), ts, 420))
+    if status == "pending_approval":
+        set_pad(KEY_RESTOCK, breathe(COLOR_AMBER, scale(COLOR_AMBER, 10), ts, 520))
+    elif status in ("approved", "payment_started"):
+        set_pad(KEY_RESTOCK, breathe(COLOR_CYAN, scale(COLOR_CYAN, 12), ts, 420))
     elif status in ("ordered", "received"):
-        set_pad(KEY_SUPPLY_BUY, scale(COLOR_GREEN, 70))
+        set_pad(KEY_RESTOCK, scale(COLOR_GREEN, 70))
     elif status in ("failed", "rejected"):
-        set_pad(KEY_SUPPLY_BUY, blink(COLOR_RED, scale(COLOR_RED, 10), ts, 320))
+        set_pad(KEY_RESTOCK, blink(COLOR_RED, scale(COLOR_RED, 10), ts, 320))
 
 
 def paint_health(ts):
-    """Row 3 only paints on PROBLEMS.
+    """ERROR cell paints only on backend/health problems.
 
-    "ok" health stays OFF -- a healthy system has no LEDs to draw
-    attention. Operators only need to see health when something is
-    wrong.
+    The grid is primarily an operator workflow surface, so detailed
+    subsystem health stays in the kiosk. The Pico uses one catch-all
+    ERROR cell for demo-visible failures.
     """
 
     health = state.get("health", {})
-    for index, key in (
-        (KEY_CAMERA, "camera"),
-        (KEY_MODEL,  "model"),
-        (KEY_PHONE,  "phone"),
-    ):
-        status = (health.get(key) or "unknown").lower()
-        if status == "warmup":
-            set_pad(index, breathe(COLOR_AMBER, scale(COLOR_AMBER, 10), ts, 900))
-        elif status in ("warn", "fail", "error", "down"):
-            set_pad(index, blink(COLOR_RED, scale(COLOR_RED, 10), ts, 320))
-        # "ok", "mock", "unknown" -- stay OFF.
+    problem = False
+    warmup = False
+    if isinstance(health, dict):
+        for key in ("camera", "model", "phone"):
+            status = (health.get(key) or "unknown").lower()
+            if status == "warmup":
+                warmup = True
+            elif status in ("warn", "fail", "error", "down"):
+                problem = True
 
-    if state.get("error_message"):
+    if state.get("error_message") or problem:
         set_pad(KEY_ERROR, blink(COLOR_RED, COLOR_WHITE, ts, 220))
+    elif warmup:
+        set_pad(KEY_ERROR, breathe(COLOR_AMBER, scale(COLOR_AMBER, 8), ts, 900))
 
 
 def paint_flashes(ts):
@@ -434,9 +558,9 @@ def paint_flashes(ts):
 
     Each flash is the bridge's signal that the model just noticed
     a fruit move:
-      * green pulse on row-2 cell  -> count went up (item added)
-      * amber pulse on row-2 cell  -> count went down (item removed)
-      * red strobe on row-2 cell   -> count hit zero (out of stock)
+      * green pulse on + cell     -> count went up (item added)
+      * amber pulse on - cell     -> count went down (item removed/sold)
+      * red strobe on out cell    -> count hit zero (out of stock)
 
     Flashes win over every other layer for the duration of their
     deadline, so a count change is visually the loudest event.
@@ -462,11 +586,7 @@ def paint():
     paint_legend(ts)              # everything off
     paint_ready_invite(ts)        # only if operator hasn't pressed READY
     paint_attention(ts)           # only keys that have pending work
-    paint_active_fruit(ts)        # one cell glow / amber / red strobe
-    paint_workflow(ts)            # only if call/payment/order is mid-flight
-    paint_supply_buy_state(ts)    # post-approval restock phases
-    paint_health(ts)              # only on warmup or error
-    paint_flashes(ts)             # transient count-change pulses
+    paint_status_grid(ts)         # lower 3x4 same-color video status block
     # Press flash is the final overlay so the operator sees their
     # press regardless of what every other layer painted there.
     if flash_index >= 0 and ts < flash_until_ms:
@@ -536,6 +656,7 @@ def apply_host_payload(payload):
             "active_item":     payload.get("active_item", ""),
             "active_count":    payload.get("active_count", 0),
             "active_low":      payload.get("active_low", False),
+            "fruit_status":    payload.get("fruit_status", state.get("fruit_status", {})),
             "order_status":    payload.get("order_status", ""),
             "call_active":     payload.get("call_active", False),
             "payment_pending": payload.get("payment_pending", False),

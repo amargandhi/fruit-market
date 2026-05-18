@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import time
 
 from fastapi.testclient import TestClient
@@ -69,6 +70,52 @@ def test_phone_webhook_rejects_bad_signature(monkeypatch) -> None:  # type: igno
         )
 
     assert response.status_code == 401
+
+
+def test_phone_webhook_passes_agentphone_data_from_to_brain(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("AGENTPHONE_WEBHOOK_SECRET", "whsec_test")
+    seen: dict[str, object] = {}
+
+    from fruit_market.brain import gemini
+
+    def fake_generate_reply(transcript, services, *, caller_phone=None):  # type: ignore[no-untyped-def]
+        seen["transcript"] = transcript
+        seen["caller_phone"] = caller_phone
+        return "Fruit Market here."
+
+    monkeypatch.setattr(gemini, "generate_reply", fake_generate_reply)
+    body = json.dumps(
+        {
+            "event": "agent.message",
+            "channel": "voice",
+            "data": {
+                "message": "Do you have apples?",
+                "from": "+14153364351",
+                "to": "+15312284935",
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+    timestamp = str(int(time.time()))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/webhooks/phone",
+            content=body,
+            headers={
+                "X-Webhook-Signature": _agentphone_signature(
+                    "whsec_test", timestamp, body
+                ),
+                "X-Webhook-Timestamp": timestamp,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "Fruit Market here."}
+    assert seen == {
+        "transcript": "Do you have apples?",
+        "caller_phone": "+14153364351",
+    }
 
 
 def test_stripe_webhook_marks_order_paid(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -149,3 +196,9 @@ def _stripe_signature(secret: str, timestamp: str, body: bytes) -> str:
     signed = f"{timestamp}.".encode() + body
     digest = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
     return f"t={timestamp},v1={digest}"
+
+
+def _agentphone_signature(secret: str, timestamp: str, body: bytes) -> str:
+    signed = timestamp.encode() + b"." + body
+    digest = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"

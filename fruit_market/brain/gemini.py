@@ -35,7 +35,7 @@ def handle_agentphone_message(
     transcript = _message_text(envelope, raw_payload)
     if not transcript:
         return "Thanks for calling Fruit Market. How can I help?"
-    caller_phone = envelope.call.from_phone if envelope.call is not None else None
+    caller_phone = _caller_phone(envelope, raw_payload)
     return generate_reply(transcript, services, caller_phone=caller_phone)
 
 
@@ -185,3 +185,17 @@ def _message_text(envelope: AgentPhoneWebhookEnvelope, raw_payload: dict[str, An
         if isinstance(message, str):
             return message
     return ""
+
+
+def _caller_phone(
+    envelope: AgentPhoneWebhookEnvelope,
+    raw_payload: dict[str, Any],
+) -> str | None:
+    if envelope.call is not None:
+        return envelope.call.from_phone
+    data = raw_payload.get("data", {})
+    if isinstance(data, dict):
+        value = data.get("from") or data.get("from_phone") or data.get("fromNumber")
+        if isinstance(value, str) and value.startswith("+"):
+            return value
+    return None

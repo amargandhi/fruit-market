@@ -26,6 +26,10 @@ def test_serialize_state_round_trips() -> None:
         active_item="banana",
         active_count=3,
         active_low=False,
+        fruit_status={
+            "apple": {"count": 4, "active": False, "low": False},
+            "banana": {"count": 3, "active": True, "low": False},
+        },
         attention={"packed": True, "supply_buy": True},
         health={"camera": "ok", "model": "warmup", "phone": "mock"},
     )
@@ -35,6 +39,8 @@ def test_serialize_state_round_trips() -> None:
     assert parsed["event"] == "state"
     assert parsed["active_item"] == "banana"
     assert parsed["active_count"] == 3
+    assert parsed["fruit_status"]["apple"]["count"] == 4
+    assert parsed["fruit_status"]["banana"]["active"] is True
     assert parsed["restock_status"] == ""
     # All action names present in attention, defaulted to False.
     for name in ACTION_NAMES:
@@ -98,12 +104,13 @@ def test_parse_button_event_accepts_bytes() -> None:
 def test_parse_hello_event() -> None:
     line = (
         '{"event":"hello","device":"fm-pico-keypad","version":1,'
-        '"actions":["confirm","packed","supply_buy"]}'
+        '"actions":["ready","packed","cancel","supply_buy"]}'
     )
     hello = parse_event_line(line)
     assert isinstance(hello, PicoHello)
     assert hello.device == "fm-pico-keypad"
     assert hello.version == 1
+    assert "ready" in hello.actions
     assert "supply_buy" in hello.actions
 
 
