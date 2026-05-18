@@ -425,10 +425,13 @@ def paint_status_grid(ts):
             elif order_status in ("paid", "packed"):
                 mode = "pulse" if order_status == "paid" else "solid"
                 color = COLOR_GREEN
-            elif apple_low or banana_low:
-                mode = "pulse"
-                color = COLOR_AMBER
             elif _store_is_open():
+                # No event in flight — calm blue solid. Low-stock
+                # awareness is intentionally NOT surfaced on the
+                # keypad block (it'd pulse amber the whole demo
+                # whenever inventory dips). The kiosk's Activity
+                # panel + the per-fruit cells in rows 1-2 carry
+                # that signal.
                 mode = "solid"
                 color = COLOR_BLUE
 
