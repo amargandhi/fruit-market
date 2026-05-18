@@ -361,33 +361,39 @@ class VisionWatcher:
         self.status.last_skipped_motion = False
         self._previous_frame = frame
 
-        # One detect call PER ITEM, then CROSS-CLASS dedup before
-        # we count boxes. This fixes the "apple sometimes counted
-        # as banana" failure mode: PaliGemma's ``detect banana``
-        # will occasionally draw a box around an apple, and intra-
-        # class NMS can't catch that (the box doesn't overlap with
-        # other "banana" boxes). Cross-class dedup catches it by
-        # noticing the same physical region is claimed by both
-        # ``detect apple`` and ``detect banana`` and keeping only
-        # the larger box (a proxy for "the class that saw it
-        # more confidently").
+        # Per-item model call. The model wrapper's ``count(image, noun)``
+        # picks the right task internally based on FM_VISION_COUNT_MODE:
+        #   * count  (default) — fast integer task, ~450 ms warm
+        #   * detect — slower box task with per-class detection.
+        # When detect mode is active AND the model exposes detect_boxes,
+        # we also run cross-class dedup to catch PaliGemma's
+        # "sometimes-an-apple-is-a-banana" failure mode.
         change_ts = time.time()
-        per_class_boxes: dict[str, list[tuple[int, int, int, int]]] = {}
-        for item in items_to_count:
-            try:
-                per_class_boxes[item.name] = await loop.run_in_executor(
-                    None, self._model.detect_boxes, frame, item.name
-                )
-            except Exception:
-                logger.exception("model detect failed for %r", item.name)
-                # Don't put a key in per_class_boxes for failures;
-                # the stability buffer for this noun stays unchanged
-                # and the count stays at its previous committed value.
+        batch: dict[str, int] = {}
 
-        # Cross-class dedup: drop boxes that overlap (IoU >= 0.5)
-        # across classes. Keep the larger box in any conflict.
-        deduped = _cross_class_nms(per_class_boxes, _CROSS_CLASS_IOU)
-        batch: dict[str, int] = {name: len(boxes) for name, boxes in deduped.items()}
+        # Detect path (with cross-class dedup) — only when the model
+        # actually exposes detect_boxes AND is configured for detect.
+        # Otherwise we run the cheaper integer ``count`` path.
+        model_mode = getattr(self._model, "_mode", "count")
+        if model_mode == "detect" and hasattr(self._model, "detect_boxes"):
+            per_class_boxes: dict[str, list[tuple[int, int, int, int]]] = {}
+            for item in items_to_count:
+                try:
+                    per_class_boxes[item.name] = await loop.run_in_executor(
+                        None, self._model.detect_boxes, frame, item.name
+                    )
+                except Exception:
+                    logger.exception("model detect failed for %r", item.name)
+            deduped = _cross_class_nms(per_class_boxes, _CROSS_CLASS_IOU)
+            batch = {name: len(boxes) for name, boxes in deduped.items()}
+        else:
+            for item in items_to_count:
+                try:
+                    batch[item.name] = await loop.run_in_executor(
+                        None, self._model.count, frame, item.name
+                    )
+                except Exception:
+                    logger.exception("model count failed for %r", item.name)
 
         # Now iterate items to update inventory + activity. We
         # preserve the per-item failure tolerance: a missing noun

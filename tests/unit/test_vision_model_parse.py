@@ -13,6 +13,7 @@ import time
 
 from fruit_market.vision.model import (
     _LOC_TOKEN_RE,
+    _ROI_PRESETS,
     COUNT_PROMPT,
     DETECT_PROMPT,
     PaliGemmaCounter,
@@ -20,6 +21,7 @@ from fruit_market.vision.model import (
     _iou,
     _nms,
     _parse_loc_boxes,
+    _resolve_roi,
 )
 
 
@@ -142,13 +144,48 @@ def test_nms_keeps_distinct_nearby_instances() -> None:
     assert len(kept) == 2
 
 
-def test_default_mode_is_detect() -> None:
-    """The default count mode should be detect (more accurate on
-    clustered scenes). Operators can opt out via env."""
+def test_roi_resolves_default_when_unset() -> None:
+    """Empty/None spec returns the bottom-center preset."""
+
+    default = _ROI_PRESETS["bottom-center"]
+    assert _resolve_roi(None) == default
+    assert _resolve_roi("") == default
+    assert _resolve_roi("   ") == default
+
+
+def test_roi_resolves_named_presets() -> None:
+    assert _resolve_roi("off") == _ROI_PRESETS["off"]
+    assert _resolve_roi("full") == _ROI_PRESETS["full"]
+    assert _resolve_roi("tight") == _ROI_PRESETS["tight"]
+    # Case-insensitive.
+    assert _resolve_roi("BOTTOM-CENTER") == _ROI_PRESETS["bottom-center"]
+
+
+def test_roi_resolves_inline_tuple() -> None:
+    """Operators can pass ``y0,x0,y1,x1`` directly via env."""
+
+    assert _resolve_roi("0.1,0.2,0.9,0.8") == (0.1, 0.2, 0.9, 0.8)
+
+
+def test_roi_falls_back_on_invalid_input() -> None:
+    """Bad input never raises — it silently falls back to default."""
+
+    default = _ROI_PRESETS["bottom-center"]
+    assert _resolve_roi("not a roi") == default
+    assert _resolve_roi("0.5,0.5") == default       # too few parts
+    assert _resolve_roi("1.5,0.0,2.0,3.0") == default  # out of range
+    assert _resolve_roi("0.5,0.5,0.5,0.5") == default  # zero-area box
+
+
+def test_default_mode_is_count() -> None:
+    """The default mode is ``count`` (single-integer task, ~450 ms
+    warm) — faster than detect and immune to cross-class confusion.
+    Detect mode is opt-in via FM_VISION_COUNT_MODE=detect for when
+    per-box localization is needed."""
 
     counter = PaliGemmaCounter(model_id="dummy-model-id")
     snap = counter.status()
-    assert snap["mode"] == "detect"
+    assert snap["mode"] == "count"
 
 
 def test_status_before_load_reports_unloaded() -> None:

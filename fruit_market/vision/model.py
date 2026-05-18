@@ -77,9 +77,28 @@ DETECT_MAX_TOKENS = 128
 # we can debug it; we don't want randomness masking systematic
 # misreads.
 COUNT_TEMPERATURE = 0.0
-# Two modes; default is detect (more accurate on clustered scenes).
-# Override with FM_VISION_COUNT_MODE=count for the legacy fast path.
-DEFAULT_COUNT_MODE = "detect"
+# Default mode is ``count`` (single-integer task, ~450 ms warm).
+# It's faster than ``detect`` (~1 s warm with bounding boxes) and
+# can't suffer from cross-class confusion because the model never
+# emits class labels — it just answers "how many X" with an integer.
+# Switch to ``detect`` with FM_VISION_COUNT_MODE=detect when you
+# want per-box localisation (slower, denser-scene accuracy gain).
+DEFAULT_COUNT_MODE = "count"
+# Region-of-interest crop applied to every captured frame BEFORE
+# inference. Pre-cropping to the fruit area gives PaliGemma's
+# 224x224 encoder roughly 4× more pixels per fruit, which lifts
+# accuracy on clustered scenes without changing the prompt.
+# Format: "{name}" (named preset) or "y0,x0,y1,x1" floats 0..1.
+# Disable with FM_VISION_ROI=off.
+DEFAULT_ROI_NAME = "bottom-center"
+# Named presets keyed by the FM_VISION_ROI env value.
+# Values are (y0, x0, y1, x1) in 0..1 normalized coords (origin top-left).
+_ROI_PRESETS: dict[str, tuple[float, float, float, float]] = {
+    "off":            (0.0, 0.0, 1.0, 1.0),
+    "full":           (0.0, 0.0, 1.0, 1.0),
+    "bottom-center":  (0.20, 0.15, 1.00, 0.85),  # bottom 80% × middle 70%
+    "tight":          (0.30, 0.20, 0.95, 0.80),  # tighter framing
+}
 
 
 _INT_RE = re.compile(r"(\d+)")
@@ -139,11 +158,17 @@ class PaliGemmaCounter:
         self._config: object | None = None
         self._last_raw_response: str | None = None
         self._engine_load_s: float | None = None
-        # detect (default) vs count (legacy). Mode is per-counter so
-        # tests can pin it; env override is read once at construction.
+        # count (default, fast) vs detect (per-box, slower). Mode is
+        # per-counter so tests can pin it; env override is read once
+        # at construction.
         self._mode = os.environ.get("FM_VISION_COUNT_MODE", DEFAULT_COUNT_MODE).strip().lower()
         if self._mode not in {"detect", "count"}:
             self._mode = DEFAULT_COUNT_MODE
+        # Resolve the ROI preset once at construction. Inference
+        # never re-reads the env, so changing it requires a restart
+        # (same shape as the mode flag, by design — these knobs are
+        # not hot-swappable).
+        self._roi = _resolve_roi(os.environ.get("FM_VISION_ROI"))
         # Background warmup state. ``_warmup_thread`` is None until
         # ``warmup_async`` is called; alive while loading; absent
         # again once joined.
@@ -230,6 +255,7 @@ class PaliGemmaCounter:
             from PIL import Image  # noqa: PLC0415
 
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image = _apply_roi(image, self._roi)  # type: ignore[assignment]
             noun_clean = noun.strip()
 
             if self._mode == "detect":
@@ -335,6 +361,7 @@ class PaliGemmaCounter:
             from PIL import Image  # noqa: PLC0415
 
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            image = _apply_roi(image, self._roi)  # type: ignore[assignment]
             return self._detect_boxes_locked(image, noun.strip())
 
     def _detect_boxes_locked(
@@ -448,6 +475,53 @@ class PaliGemmaCounter:
     @property
     def engine_load_s(self) -> float | None:
         return self._engine_load_s
+
+
+def _resolve_roi(spec: str | None) -> tuple[float, float, float, float]:
+    """Map an env-style ROI spec to a (y0, x0, y1, x1) tuple.
+
+    Accepts:
+      * ``None`` or empty → default preset (``bottom-center``)
+      * a preset name (``off``, ``full``, ``bottom-center``, ``tight``)
+      * a comma-separated float tuple, e.g. ``"0.2,0.1,1.0,0.9"``
+
+    Invalid input falls back to the default preset rather than
+    raising — we never want a malformed env var to wedge the model.
+    """
+
+    if not spec or not spec.strip():
+        return _ROI_PRESETS[DEFAULT_ROI_NAME]
+    text = spec.strip().lower()
+    if text in _ROI_PRESETS:
+        return _ROI_PRESETS[text]
+    try:
+        parts = [float(p) for p in text.split(",")]
+        if len(parts) == 4 and all(0.0 <= p <= 1.0 for p in parts):
+            y0, x0, y1, x1 = parts
+            if y0 < y1 and x0 < x1:
+                return (y0, x0, y1, x1)
+    except (TypeError, ValueError):
+        pass
+    return _ROI_PRESETS[DEFAULT_ROI_NAME]
+
+
+def _apply_roi(image: object, roi: tuple[float, float, float, float]) -> object:
+    """Crop ``image`` (PIL) to ``roi`` in normalized coords.
+
+    Returns the original image if the ROI is the full frame, to
+    skip a needless copy on the fast path.
+    """
+
+    y0_f, x0_f, y1_f, x1_f = roi
+    if y0_f == 0.0 and x0_f == 0.0 and y1_f == 1.0 and x1_f == 1.0:
+        return image
+    width = image.width  # type: ignore[attr-defined]
+    height = image.height  # type: ignore[attr-defined]
+    left = int(width * x0_f)
+    top = int(height * y0_f)
+    right = int(width * x1_f)
+    bottom = int(height * y1_f)
+    return image.crop((left, top, right, bottom))  # type: ignore[attr-defined]
 
 
 def _parse_loc_boxes(text: str) -> list[tuple[int, int, int, int]]:
